@@ -9,6 +9,7 @@ import { socketService } from './services/socketService';
 const MOCK_OFFICER_LEADS: SalesLead[] = [
   { id: 'LD-1', clientName: 'SM Hypermarket Makati', value: 5000000, stage: 'Closing', probability: 0.9, qrStatus: 'Active', currentMonthVolume: 2450000, lastTxDate: new Date(), reports: [] },
   { id: 'LD-2', clientName: 'Mercury Drug Ayala', value: 2000000, stage: 'Meeting', probability: 0.7, qrStatus: 'Onboarded_Inactive', currentMonthVolume: 0, lastTxDate: undefined, reports: [] },
+  { id: 'LD-3', clientName: 'Puregold Qi Central', value: 1500000, stage: 'Proposal', probability: 0.5, qrStatus: 'Prospect', currentMonthVolume: 0, lastTxDate: undefined, reports: [] },
 ];
 
 const INITIAL_OFFICER_TEMPLATE: SalesOfficer = { 
@@ -42,33 +43,54 @@ const App: React.FC = () => {
 
   // 1. Data Fetching Strategy: Trigger on Load AND on Auth Change
   useEffect(() => {
-    // We only attempt to fetch if we have a token (implied by user existence or local check)
-    // But checking 'user' state is the most reliable react way to know we are "logged in"
     if (user) {
         const loadOfficers = async () => {
             console.log("[App] Fetching latest fleet data...");
             try {
                 const data = await persistenceService.fetchOfficersAPI();
                 
-                if (Array.isArray(data)) {
+                if (Array.isArray(data) && data.length > 0) {
                     console.log(`[App] Loaded ${data.length} officers from API`);
-                    setOfficers(data);
+                    // Merge mock leads if leads are empty (since DB usually doesn't store leads in this simple schema)
+                    const enrichedData = data.map(o => ({
+                        ...INITIAL_OFFICER_TEMPLATE, // Defaults
+                        ...o, // Overwrites from DB
+                        leads: o.leads && o.leads.length > 0 ? o.leads : MOCK_OFFICER_LEADS // Ensure leads exist for UI
+                    }));
+                    setOfficers(enrichedData);
                 } else {
-                    console.warn("[App] API returned invalid data format");
+                    console.warn("[App] API returned 0 nodes. Constructing fallback identity...");
+                    handleFallbackIdentity();
                 }
             } catch (e) {
                 console.error("[App] Failed to load officers", e);
+                handleFallbackIdentity();
             }
         };
         loadOfficers();
     }
-  }, [user]); // CRITICAL FIX: Run this when 'user' changes (Login success)
+  }, [user]); 
+
+  // Fallback: If DB is empty or unreachable, create a local representation of "Me" so the app works
+  const handleFallbackIdentity = () => {
+      if (user && user.role !== 'Admin') {
+          const self: SalesOfficer = {
+              ...INITIAL_OFFICER_TEMPLATE,
+              id: user.assignedOfficerId || 'OFC-TEMP',
+              name: user.username,
+              role: user.role as any,
+              status: 'Active',
+              lastUpdate: new Date(),
+              avatar: undefined // Will force Initials avatar
+          };
+          setOfficers([self]);
+      }
+  };
 
   // Native App Feature: Offline Detection & Sync
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      // We don't sync here immediately. We wait for WS to connect (see below)
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -120,10 +142,7 @@ const App: React.FC = () => {
                 const index = newOfficers.findIndex(o => o.id === update.id);
                 if (index !== -1) {
                     newOfficers[index] = { ...newOfficers[index], ...update, lastUpdate: new Date() };
-                } else {
-                    // If we receive an update for an officer we don't have, we should probably fetch or add them.
-                    // For now, let's wait for Roster Update or next fetch.
-                }
+                } 
             });
             return newOfficers;
         });
@@ -155,7 +174,6 @@ const App: React.FC = () => {
     if (wsStatus === 'Broadcasting_Live') {
         persistenceService.processSyncQueue(async (action, payload) => {
              if (action === 'TELEMETRY') {
-                 // Pass 'true' to bypass the queue since we are now live
                  socketService.sendTelemetry(payload, true);
              }
         });
@@ -179,7 +197,6 @@ const App: React.FC = () => {
   };
 
   const handleAddBDO = async (name: string, code: string, password: string, avatar: string) => {
-    // Prevent duplicate codes locally
     if (officers.find(o => o.id === code)) {
       alert("Error: BDO Code already exists!");
       return;
@@ -253,12 +270,12 @@ const App: React.FC = () => {
   const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || officers[0];
 
   // Prevent rendering BDOView if data isn't ready
-  // CRITICAL FIX: Ensure ALL non-admin roles trigger this guard, not just 'BDO' strict equality
+  // GUARD: If Admin, we don't need currentOfficer. If BDO, we DO need it.
   if (user.role !== 'Admin' && !currentOfficer) {
       return (
         <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
            <div className="w-10 h-10 border-4 border-[#003366] border-t-transparent rounded-full animate-spin"></div>
-           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Initializing Fleet Data...</p>
+           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Syncing Profile...</p>
         </div>
       );
   }

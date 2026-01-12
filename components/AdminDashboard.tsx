@@ -4,6 +4,7 @@ import Sidebar from './Sidebar';
 import MapComponent from './MapComponent';
 import { r2Service } from '../services/r2Service';
 import { historyService } from '../services/historyService';
+import { socketService } from '../services/socketService';
 
 interface AdminDashboardProps {
   user: User;
@@ -55,7 +56,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setSystemLogs(prev => [
           { id: Date.now(), time: new Date().toLocaleTimeString(), type, msg },
           ...prev
-      ].slice(0, 50)); // Keep last 50 logs
+      ].slice(50)); // Keep last 50 logs
   };
 
   // Monitor WebSocket Status changes for logs
@@ -168,9 +169,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div>
                     <h1 className="text-sm font-black tracking-[0.2em] uppercase text-white">BDO Fleet<span className="text-cyan-400">Guard</span></h1>
-                    <div className="flex items-center gap-1.5 mt-0.5">
+                    <div className="flex items-center gap-1.5 mt-0.5 group relative cursor-help">
                         <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'Broadcasting_Live' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' : 'bg-red-500 animate-pulse'}`}></div>
-                        <span className="text-[9px] font-mono text-slate-400 uppercase">{wsStatus === 'Broadcasting_Live' ? 'SYS_ONLINE' : 'SYS_OFFLINE'}</span>
+                        <span className={`text-[9px] font-mono uppercase ${wsStatus === 'Broadcasting_Live' ? 'text-slate-400' : 'text-red-400 font-bold'}`}>
+                            {wsStatus === 'Broadcasting_Live' ? 'SYS_ONLINE' : wsStatus?.toUpperCase() || 'OFFLINE'}
+                        </span>
+                        
+                        {/* Status Tooltip */}
+                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block bg-black/90 p-2 rounded border border-white/10 whitespace-nowrap z-50">
+                            <p className="text-[8px] text-slate-400 uppercase">Target Server:</p>
+                            <p className="text-[9px] text-cyan-400 font-mono">{socketService.getWsUrl()}</p>
+                        </div>
                     </div>
                 </div>
             </div>

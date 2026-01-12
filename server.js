@@ -136,7 +136,6 @@ const initDB = async (retries = 3, delay = 2000) => {
         );
       `);
       
-      // Updated Schema to include battery and status in history
       await pool.query(`
         CREATE TABLE IF NOT EXISTS location_history (
           id SERIAL PRIMARY KEY,
@@ -149,7 +148,6 @@ const initDB = async (retries = 3, delay = 2000) => {
         );
       `);
 
-      // Seed Admin ONLY if table empty
       const checkAdmin = await pool.query("SELECT * FROM officers WHERE id = 'admin'");
       if (checkAdmin.rowCount === 0) {
            await pool.query(`
@@ -202,7 +200,6 @@ app.post('/api/login', requireApiKey, async (req, res) => {
 
 app.get('/api/officers', authenticateToken, async (req, res) => {
   try {
-    // Force consistent ordering by name so list doesn't jump around
     const result = await pool.query('SELECT * FROM officers ORDER BY name ASC');
     const officers = result.rows.map(o => ({
       ...o,
@@ -282,7 +279,7 @@ app.post('/api/upload-proxy', authenticateToken, async (req, res) => {
   }
 });
 
-// --- WEBSOCKET SERVER ---
+// --- WEBSOCKET SERVER & BATCH PROCESSING ---
 const broadcast = (msg) => {
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN && client.clientType === 'dashboard') {
@@ -290,6 +287,55 @@ const broadcast = (msg) => {
     }
   });
 };
+
+// WRITE BUFFER: Holds updates in memory
+const WRITE_BUFFER = {
+    updates: new Map(), // Key: OfficerID, Value: Data
+    history: []         // Array of history items
+};
+
+// BATCH FLUSH: Writes to DB every 10 seconds
+setInterval(async () => {
+    if (WRITE_BUFFER.updates.size === 0 && WRITE_BUFFER.history.length === 0) return;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Bulk Update Current Status
+        if (WRITE_BUFFER.updates.size > 0) {
+            const updates = Array.from(WRITE_BUFFER.updates.values());
+            for (const u of updates) {
+                await client.query(
+                    `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5`,
+                    [u.lat, u.lng, u.battery, u.status, u.id]
+                );
+            }
+            console.log(`[DB] Flushed ${updates.length} status updates`);
+            WRITE_BUFFER.updates.clear();
+        }
+
+        // 2. Bulk Insert History
+        if (WRITE_BUFFER.history.length > 0) {
+            // Processing in chunks to be safe
+            const batch = WRITE_BUFFER.history.splice(0, 50); // Take 50 items at a time
+            for (const h of batch) {
+                await client.query(
+                  'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
+                  [h.id, h.lat, h.lng, h.battery, h.status]
+                );
+            }
+            console.log(`[DB] Flushed ${batch.length} history records`);
+        }
+
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error("[DB] Batch Write Failed:", e.message);
+    } finally {
+        client.release();
+    }
+}, 10000); // 10 Seconds Interval
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -315,36 +361,20 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (msg) => {
     try {
       const data = JSON.parse(msg);
-      // Telemetry Handler
       if (data.type === 'TELEMETRY') {
         const { id, lat, lng, battery, status } = data.payload;
-        
-        // Write to DB asynchronously (Fire & Forget for speed)
-        pool.query(
-          `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5`,
-          [lat, lng, battery, status, id]
-        ).catch(e => console.error("Telemetry Write Error:", e.message));
 
-        // Insert History with Robust Fallback
-        if (lat && lng) {
-             pool.query(
-              'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
-              [id, lat, lng, battery, status]
-            ).catch(e => {
-                // Compatibility Fallback: If 'battery' or 'status' columns don't exist yet in live DB
-                if (e.message && (e.message.includes('column') || e.message.includes('battery') || e.message.includes('status'))) {
-                     pool.query(
-                      'INSERT INTO location_history (node_id, lat, lng) VALUES ($1, $2, $3)',
-                      [id, lat, lng]
-                    ).catch(ex => console.error("History Insert Failed (Legacy):", ex.message));
-                } else {
-                    console.error("History Insert Failed:", e.message);
-                }
-            });
-        }
-
-        // Broadcast to Dashboards
+        // 1. Broadcast IMMEDIATELY to Dashboards (Real-time Feel)
         broadcast([data.payload]);
+
+        // 2. Buffer for DB Write (Protect Free Tier)
+        // Only update current status map (overwrites previous update from same user in this window)
+        WRITE_BUFFER.updates.set(id, { id, lat, lng, battery, status });
+        
+        // Push to history buffer (Log every point)
+        if (lat && lng) {
+             WRITE_BUFFER.history.push({ id, lat, lng, battery, status });
+        }
       }
     } catch (e) {
       console.error('Socket Message Error:', e);

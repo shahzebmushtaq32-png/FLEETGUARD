@@ -24,12 +24,14 @@ class SocketService {
   private onStatusChangeCallback: ((s: ConnectionStatus) => void) | null = null;
   private reconnectAttempts = 0;
   private currentRole: 'dashboard' | 'iot' = 'iot';
+  private currentUrl: string = '';
 
-  private getWsUrl(): string {
+  public getWsUrl(): string {
+    // 1. Check LocalStorage (User Override)
     const saved = localStorage.getItem('bdo_fleet_ws_url');
     if (saved) return saved.startsWith('ws') ? saved : `wss://${saved}`;
     
-    // Check environment variable
+    // 2. Check Environment Variable
     let envUrl = '';
     if (typeof process !== 'undefined' && process.env && process.env.VITE_RENDER_WS_URL) {
       envUrl = process.env.VITE_RENDER_WS_URL;
@@ -39,6 +41,13 @@ class SocketService {
       return envUrl.replace('https://', 'wss://').replace('http://', 'ws://');
     }
 
+    // 3. Smart Localhost Detection (CRITICAL FIX)
+    // If we are running on localhost, default to local server port 10000
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+        return 'ws://localhost:10000';
+    }
+
+    // 4. Production Fallback
     return FALLBACK_URL;
   }
 
@@ -48,6 +57,7 @@ class SocketService {
     this.updateStatus('Connecting');
 
     const url = this.getWsUrl();
+    this.currentUrl = url;
     console.log(`[Step 1] Attempting authenticated connection to: ${url} as ${role}`);
 
     try {
@@ -78,17 +88,20 @@ class SocketService {
         }
       };
 
-      this.socket.onerror = () => {
+      this.socket.onerror = (e) => {
+        console.error("WebSocket Error:", e);
         this.updateStatus('Error');
       };
 
       this.socket.onclose = (event) => {
+        console.warn(`WebSocket Closed. Code: ${event.code}, Reason: ${event.reason}`);
         if (this.status !== 'Error') {
           this.updateStatus('Disconnected');
         }
         this.attemptReconnect();
       };
     } catch (err) {
+      console.error("WebSocket Init Failed:", err);
       this.updateStatus('Error');
     }
   }
@@ -104,6 +117,7 @@ class SocketService {
     if (this.reconnectAttempts < 5) {
       this.reconnectAttempts++;
       const delay = Math.pow(2, this.reconnectAttempts) * 1000;
+      console.log(`Reconnecting in ${delay}ms...`);
       setTimeout(() => {
         if (this.onStatusChangeCallback) this.connect(this.currentRole, this.onStatusChangeCallback);
       }, delay);
@@ -141,6 +155,10 @@ class SocketService {
 
   getStatus() {
     return this.status;
+  }
+
+  getCurrentUrl() {
+      return this.currentUrl;
   }
 }
 

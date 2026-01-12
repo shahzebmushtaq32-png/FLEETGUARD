@@ -39,6 +39,12 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
       
       {/* List */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-4 space-y-2">
+          {filtered.length === 0 && (
+              <div className="py-8 text-center opacity-50">
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">No active nodes</p>
+              </div>
+          )}
+
           {filtered.map(off => {
              const isSelected = selectedId === off.id;
              const statusColor = off.status === 'Active' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 
@@ -99,7 +105,6 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                              </span>
                         </div>
                         <span className="text-[8px] font-mono text-slate-600">
-                             {/* Mock time diff */}
                              1H+
                         </span>
                     </div>
