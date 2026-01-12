@@ -45,7 +45,7 @@ export const persistenceService = {
   // Public Endpoint (Only requires Gateway Key)
   login: async (id: string, password: string) => {
     const url = `${API_URL}/api/login`;
-    console.log(`[Auth] Attempting login at: ${url}`);
+    console.log(`[Auth] Attempting login at: ${url} (Key: ${WS_API_KEY.slice(0,4)}...)`);
     
     try {
       const response = await fetch(url, {
@@ -59,6 +59,7 @@ export const persistenceService = {
 
       if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
+          console.error(`[Auth] Server responded with ${response.status}:`, errData);
           throw new Error(errData.error || `Server Error: ${response.status} (${response.statusText})`);
       }
       return await response.json();

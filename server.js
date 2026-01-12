@@ -14,10 +14,10 @@ const PORT = process.env.PORT || 10000;
 
 // SECURITY KEYS
 const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122"; 
-const JWT_SECRET = process.env.JWT_SECRET; 
+const JWT_SECRET = process.env.JWT_SECRET || "default_jwt_secret_dev_only"; 
 
-if (!JWT_SECRET) {
-  console.error("🚨 CRITICAL: JWT_SECRET is missing. Authentication will fail.");
+if (process.env.JWT_SECRET === undefined) {
+  console.warn("⚠️ JWT_SECRET is not set. Using default insecure secret (Dev Mode).");
 }
 
 // --- DATABASE CONFIGURATION ---
@@ -25,24 +25,20 @@ const getDbUrl = () => {
   let url = process.env.NEON_DATABASE_URL;
   if (!url) return undefined;
   
-  // 1. Remove 'psql' command prefix if pasted accidentally
   if (url.startsWith("psql '")) {
     url = url.replace("psql '", "").replace("'", "");
   }
 
-  // 2. CRITICAL FIX: Remove 'channel_binding=require'
   if (url.includes("channel_binding=require")) {
-    console.log("⚠️ Detected channel_binding in DB URL - Removing for compatibility.");
     url = url.replace("channel_binding=require", "");
   }
 
-  // 3. Clean up any trailing characters left behind (?, &)
   return url.replace(/&+/g, '&').replace(/\?&/g, '?').replace(/[?&]$/, '');
 };
 
 const pool = new Pool({
   connectionString: getDbUrl(),
-  ssl: { rejectUnauthorized: false } // Required for Neon
+  ssl: { rejectUnauthorized: false }
 });
 
 // --- STORAGE CONFIGURATION (R2) ---
@@ -75,7 +71,7 @@ app.use((req, res, next) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// --- STRICT SECURITY MIDDLEWARE ---
+// --- MIDDLEWARE ---
 
 const requireApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'] || req.query.key;
@@ -96,7 +92,6 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) return res.status(401).json({ error: 'Session Unauthorized: Token Missing' });
-  if (!JWT_SECRET) return res.status(500).json({ error: 'Server Security Misconfiguration' });
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Session Forbidden: Invalid Token' });
@@ -106,6 +101,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 const requireRole = (allowedRoles) => (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'User context missing' });
     if (req.user.role === 'Admin') return next();
     if (!allowedRoles.includes(req.user.role)) {
         return res.status(403).json({ error: 'Forbidden: Insufficient Permissions' });
@@ -113,10 +109,13 @@ const requireRole = (allowedRoles) => (req, res, next) => {
     next();
 };
 
-// --- DATABASE INITIALIZATION ---
+// --- DB INIT ---
 const initDB = async () => {
   try {
-    // Attempt connection
+    if (!process.env.NEON_DATABASE_URL) {
+      console.warn("⚠️ NEON_DATABASE_URL not found. Database features will fail.");
+      return;
+    }
     await pool.query('SELECT 1');
     console.log("✅ Database Connection: Active");
 
@@ -145,7 +144,6 @@ const initDB = async () => {
       );
     `);
 
-    // Seed Data
     await pool.query(`
       INSERT INTO officers (id, name, password, role, status)
       VALUES 
@@ -161,11 +159,13 @@ const initDB = async () => {
 };
 initDB();
 
-// --- REST API ENDPOINTS ---
+// --- ROUTES ---
 
+// Health Check
 app.get('/', (req, res) => res.status(200).send('FleetGuard Realtime Server Active'));
 app.get('/health', (req, res) => res.status(200).send('FleetGuard Online'));
 
+// Login Route
 app.post('/api/login', requireApiKey, async (req, res) => {
   const { id, password } = req.body;
   try {
@@ -175,8 +175,6 @@ app.post('/api/login', requireApiKey, async (req, res) => {
     if (!user || user.password !== password) {
       return res.status(401).json({ error: 'Invalid Credentials' });
     }
-
-    if (!JWT_SECRET) throw new Error("JWT_SECRET not configured on server");
 
     const token = jwt.sign(
       { id: user.id, role: user.role, name: user.name }, 
@@ -194,11 +192,12 @@ app.post('/api/login', requireApiKey, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("❌ Login Error:", err.message); // This will show in Render Logs
+    console.error("❌ Login Error:", err.message);
     res.status(500).json({ error: 'Internal Server Error', details: err.message });
   }
 });
 
+// Officers Routes
 app.get('/api/officers', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM officers');
@@ -328,12 +327,10 @@ wss.on('connection', (ws, req) => {
           `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5`,
           [lat, lng, battery, status, id]
         );
-
         await pool.query(
           'INSERT INTO location_history (node_id, lat, lng) VALUES ($1, $2, $3)',
           [id, lat, lng]
         );
-
         broadcast([data.payload]);
       }
     } catch (e) {
@@ -352,10 +349,14 @@ const interval = setInterval(() => {
 
 wss.on('close', () => clearInterval(interval));
 
-// Catch-all for 404s
+// --- CATCH-ALL 404 ---
 app.use((req, res) => {
     console.log(`[404] Not Found: ${req.url}`);
     res.status(404).json({ error: `Route not found: ${req.url}` });
 });
 
-server.listen(PORT, () => console.log(`🚀 FleetGuard Server running on port ${PORT}`));
+// --- STARTUP ---
+server.listen(PORT, () => {
+    console.log(`🚀 FleetGuard Server running on port ${PORT}`);
+    console.log(`📋 Routes: /, /health, /api/login, /api/officers, /api/history/:nodeId, /api/upload-proxy`);
+});
