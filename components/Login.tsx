@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { UserRole } from '../types';
 import { persistenceService } from '../services/persistenceService';
@@ -29,49 +28,48 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    if (role === 'BDO') {
-      setLoading(true);
-      
-      // 1. Fetch registered officers from persistence service (DB Source)
-      const officers = await persistenceService.fetchOfficersAPI();
-      
-      // 2. Find matching credentials (case-insensitive for ID)
-      const officer = officers.find(o => o.id.toLowerCase() === id.toLowerCase() && o.password === password);
+    setLoading(true);
 
-      if (officer) {
-          // Native App Feature: Simulate JWT Token Generation
-          const mockToken = `bdo_jwt_${btoa(officer.id + ':' + Date.now())}`;
-          localStorage.setItem('bdo_auth_token', mockToken);
-          localStorage.setItem('bdo_user_session', JSON.stringify({
-            username: officer.name,
-            role: 'BDO',
-            officerId: officer.id,
-            expiresAt: Date.now() + 3600000 // 1 hour
-          }));
+    try {
+        // CALL REAL BACKEND AUTH
+        const response = await persistenceService.login(id, password);
+        const { token, user } = response;
 
-          // 3. Login with actual officer details
-          onLogin(officer.name, 'BDO', officer.id);
-      } else {
-        setError('Wrong Credentials. Ask Admin to register you.');
-      }
-      setLoading(false);
-    } else {
-      // Admin login check
-      if (id.toLowerCase() === 'admin' && password === 'admin') {
-        // Native App Feature: Admin Session
-        const mockToken = `bdo_admin_jwt_${Date.now()}`;
-        localStorage.setItem('bdo_auth_token', mockToken);
+        // Validation: Ensure role matches selected tab
+        if (user.role !== role && !(role === 'BDO' && user.role !== 'Admin')) {
+             throw new Error(`Access Denied: You are not authorized as ${role}`);
+        }
+
+        // Store Session
+        localStorage.setItem('bdo_auth_token', token);
         localStorage.setItem('bdo_user_session', JSON.stringify({
-          username: 'Administrator',
-          role: 'Admin',
-          expiresAt: Date.now() + 3600000
+            username: user.name,
+            role: user.role,
+            officerId: user.id,
+            expiresAt: Date.now() + (12 * 60 * 60 * 1000) // 12 hours
         }));
 
-        onLogin('Administrator', 'Admin');
-      } else {
-        setError('Wrong Admin ID or Password. (Hint: admin / admin)');
-      }
+        // Proceed
+        onLogin(user.name, user.role, user.id);
+
+    } catch (err: any) {
+        console.error("Login Failed", err);
+        setError(err.message || "Invalid ID or Connection Failed");
+        
+        // --- OFFLINE / FALLBACK MODE FOR DEMO ---
+        // If backend fails (e.g. not running locally), verify against cached officers
+        if (role === 'BDO') {
+            const officers = await persistenceService.fetchOfficersAPI();
+            const officer = officers.find(o => o.id.toLowerCase() === id.toLowerCase() && o.password === password);
+            if (officer) {
+                console.warn("Using Offline Auth Fallback");
+                onLogin(officer.name, 'BDO', officer.id);
+                setLoading(false);
+                return;
+            }
+        }
+    } finally {
+        setLoading(false);
     }
   };
 
@@ -130,7 +128,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             disabled={loading}
             className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-2xl uppercase text-[11px] tracking-[0.2em] shadow-lg active:scale-95 transition-all mt-4"
           >
-            {loading ? 'Verifying...' : 'Access Portal'}
+            {loading ? 'Authenticating...' : 'Access Portal'}
           </button>
         </form>
 

@@ -5,6 +5,7 @@ import pg from 'pg';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
 
 // Safer import for PG in ESM environments
 const { Pool } = pg;
@@ -27,6 +28,7 @@ const PORT = process.env.PORT || 10000;
 
 // Shared Secret for Authentication
 const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122";
+const JWT_SECRET = process.env.JWT_SECRET || "bdo_super_secret_dev_key_change_in_prod";
 
 // Middleware to Lock R2 Access & API Endpoints
 const requireAuth = (req, res, next) => {
@@ -70,6 +72,13 @@ const initDB = async () => {
       );
     `);
     
+    // 3. Seed Admin User if not exists
+    await pool.query(`
+      INSERT INTO officers (id, name, password, role)
+      VALUES ('admin', 'Administrator', 'admin', 'Admin')
+      ON CONFLICT (id) DO NOTHING;
+    `);
+
     console.log("✅ Database: Tables verified (location_history, officers).");
   } catch (err) {
     console.error("❌ Database Initialization Error:", err);
@@ -100,6 +109,50 @@ app.get('/health', (req, res) => {
 });
 
 // --- API ENDPOINTS ---
+
+/**
+ * AUTHENTICATION (JWT)
+ */
+app.post('/api/login', requireAuth, async (req, res) => {
+  const { id, password } = req.body;
+  
+  try {
+    // 1. Check DB for user
+    const result = await pool.query('SELECT * FROM officers WHERE id = $1', [id]);
+    const user = result.rows[0];
+
+    // 2. Validate Credentials (Simple plaintext for demo, hash in prod!)
+    if (!user || user.password !== password) {
+      return res.status(401).json({ error: 'Invalid ID or Password' });
+    }
+
+    // 3. Sign JWT
+    const token = jwt.sign(
+      { 
+        id: user.id, 
+        role: user.role, 
+        name: user.name 
+      }, 
+      JWT_SECRET, 
+      { expiresIn: '12h' }
+    );
+
+    // 4. Return Session Data
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        avatar: user.avatar
+      }
+    });
+
+  } catch (err) {
+    console.error("Login Error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 /**
  * GET ALL OFFICERS

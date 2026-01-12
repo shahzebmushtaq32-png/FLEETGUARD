@@ -26,6 +26,30 @@ const getApiUrl = () => {
 const API_URL = getApiUrl();
 
 export const persistenceService = {
+  // NEW: Real JWT Login
+  login: async (id: string, password: string) => {
+    console.log(`[Auth] Attempting login for ${id} at ${API_URL}`);
+    try {
+      const response = await fetch(`${API_URL}/api/login`, {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'x-api-key': WS_API_KEY
+        },
+        body: JSON.stringify({ id, password })
+      });
+
+      if (!response.ok) {
+        throw new Error('Invalid Credentials');
+      }
+
+      return await response.json(); // { token, user }
+    } catch (e) {
+      console.error("Login Failed:", e);
+      throw e;
+    }
+  },
+
   saveToCloudR2: async (officers: SalesOfficer[]) => {
     console.group(`[Architecture Step 3] Cloudflare R2 Storage Commit`);
     const payload = officers.map(o => ({
