@@ -1,0 +1,23 @@
+services:
+  # Backend: Realtime Geotracking Cluster (Node.js)
+  # Frontend is deployed separately on Vercel
+  - type: web
+    name: FLEETGUARD
+    env: node
+    plan: standard
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NEON_DATABASE_URL
+        sync: false
+      - key: WS_API_KEY
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
