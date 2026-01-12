@@ -12,20 +12,22 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
     <div className="flex flex-col h-full">
       <div className="p-6 border-b border-slate-100 bg-[#003366] text-white">
         <h2 className="text-lg font-black tracking-tight mb-1 uppercase italic">IoT Node Cluster</h2>
-        <p className="text-[10px] text-blue-300 uppercase font-bold tracking-widest italic">Broadcast v4 Live</p>
+        <p className="text-[10px] text-[#FFD100] uppercase font-bold tracking-widest italic">Broadcast v4 Live</p>
       </div>
       
       <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50">
         <div className="p-3">
           {devices.map(off => {
             if (!off) return null; // Safety Guard
+            const isSelected = selectedId === off.id;
+            
             return (
             <button
               key={off.id}
               onClick={() => onSelect(off.id)}
               className={`w-full text-left p-4 rounded-3xl mb-2 transition-all group relative overflow-hidden ${
-                selectedId === off.id 
-                  ? 'bg-white shadow-xl border border-blue-100' 
+                isSelected
+                  ? 'bg-white shadow-xl border-l-4 border-[#FFD100]' 
                   : 'hover:bg-slate-100 border border-transparent'
               }`}
             >
@@ -38,28 +40,27 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                     </span>
                 </div>
                 <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div>
+                    <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-[#FFD100] animate-pulse' : 'bg-blue-500'}`}></div>
                 </div>
               </div>
 
               <div className="flex items-center gap-4 mb-3">
                 {off.avatar ? (
-                  <img src={off.avatar} className="w-10 h-10 rounded-xl object-cover border-2 border-blue-500 shadow-md" alt="avatar" />
+                  <img src={off.avatar} className={`w-10 h-10 rounded-xl object-cover shadow-md transition-all ${isSelected ? 'border-2 border-[#FFD100]' : 'grayscale'}`} alt="avatar" />
                 ) : (
                   <div className="w-10 h-10 bg-slate-200 rounded-xl flex items-center justify-center">
                     <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                   </div>
                 )}
-                <h3 className={`font-black text-sm uppercase tracking-tight ${selectedId === off.id ? 'text-blue-600' : 'text-slate-800'}`}>
+                <h3 className={`font-black text-sm uppercase tracking-tight ${isSelected ? 'text-[#003366]' : 'text-slate-600'}`}>
                   {off.name}
                 </h3>
               </div>
               
               <div className="mt-3 flex items-center justify-between">
                  <div className="flex items-center gap-1.5">
-                    <div className="w-4 h-2 rounded-sm border border-slate-300 relative">
+                    <div className="w-4 h-2 rounded-sm border border-slate-300 relative bg-slate-100">
                         <div className={`h-full ${off.battery < 20 ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${off.battery}%` }}></div>
-                        <div className="absolute -right-1 top-0.5 w-0.5 h-1 bg-slate-300"></div>
                     </div>
                     <span className="text-[9px] font-black text-slate-500">{off.battery}%</span>
                  </div>
