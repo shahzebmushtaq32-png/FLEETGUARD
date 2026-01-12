@@ -121,6 +121,7 @@ const initDB = async (retries = 3, delay = 2000) => {
       await pool.query('SELECT 1');
       console.log("✅ NeonDB Connection: Active");
       
+      // Updated Schema to support Native App Metadata
       await pool.query(`
         CREATE TABLE IF NOT EXISTS officers (
           id TEXT PRIMARY KEY,
@@ -132,7 +133,9 @@ const initDB = async (retries = 3, delay = 2000) => {
           battery INTEGER DEFAULT 100,
           lat DOUBLE PRECISION,
           lng DOUBLE PRECISION,
-          last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          telemetry_source TEXT DEFAULT 'WEB',
+          app_version TEXT
         );
       `);
       
@@ -204,6 +207,8 @@ app.get('/api/officers', authenticateToken, async (req, res) => {
     const officers = result.rows.map(o => ({
       ...o,
       lastUpdate: o.last_update,
+      telemetrySource: o.telemetry_source || 'WEB', // Map DB snake_case to JS camelCase
+      appVersion: o.app_version,
       networkType: '5G', 
       leads: [], history: [], evidence: [], tasks: []
     }));
@@ -306,9 +311,10 @@ setInterval(async () => {
         if (WRITE_BUFFER.updates.size > 0) {
             const updates = Array.from(WRITE_BUFFER.updates.values());
             for (const u of updates) {
+                // Now updates telemetry_source and app_version columns too
                 await client.query(
-                    `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5`,
-                    [u.lat, u.lng, u.battery, u.status, u.id]
+                    `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW(), telemetry_source=$5, app_version=$6 WHERE id=$7`,
+                    [u.lat, u.lng, u.battery, u.status, u.telemetrySource || 'WEB', u.appVersion || '1.0.0', u.id]
                 );
             }
             console.log(`[DB] Flushed ${updates.length} status updates`);
@@ -362,14 +368,14 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(msg);
       if (data.type === 'TELEMETRY') {
-        const { id, lat, lng, battery, status } = data.payload;
+        const { id, lat, lng, battery, status, telemetrySource, appVersion } = data.payload;
 
         // 1. Broadcast IMMEDIATELY to Dashboards (Real-time Feel)
         broadcast([data.payload]);
 
         // 2. Buffer for DB Write (Protect Free Tier)
         // Only update current status map (overwrites previous update from same user in this window)
-        WRITE_BUFFER.updates.set(id, { id, lat, lng, battery, status });
+        WRITE_BUFFER.updates.set(id, { id, lat, lng, battery, status, telemetrySource, appVersion });
         
         // Push to history buffer (Log every point)
         if (lat && lng) {

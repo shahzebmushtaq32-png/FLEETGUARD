@@ -119,7 +119,8 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
             battery: batteryLevel, 
             status: currentStatus,
             lastUpdate: new Date(),
-            accuracy: pos.coords.accuracy 
+            accuracy: pos.coords.accuracy,
+            telemetrySource: 'WEB' as const // Explicitly tag as Web to distinguish from Native App
         };
 
         // Stream location to Admin
@@ -182,7 +183,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const updateDuty = (status: any) => {
     setCurrentStatus(status);
     if (!officer) return;
-    const updatedOfficer = { ...officer, status };
+    const updatedOfficer = { ...officer, status, telemetrySource: 'WEB' as const };
     socketService.sendTelemetry(updatedOfficer);
   };
 
@@ -209,7 +210,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
           const url = await r2Service.uploadEvidence(imageData, filename);
           
           // Update Profile & Notify
-          socketService.sendTelemetry({ ...officer, avatar: url });
+          socketService.sendTelemetry({ ...officer, avatar: url, telemetrySource: 'WEB' as const });
           
           if (isSecurityCheck) {
               setNotification({ title: 'Protocol Delta', msg: `Security Check Passed` });

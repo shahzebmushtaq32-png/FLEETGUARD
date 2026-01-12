@@ -50,6 +50,9 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
              const statusColor = off.status === 'Active' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 
                                  off.status === 'Break' ? 'text-amber-400 bg-amber-400/10 border-amber-400/20' : 
                                  'text-slate-400 bg-slate-400/10 border-slate-400/20';
+             
+             // Detect if using Native App Background Service
+             const isNative = off.telemetrySource && off.telemetrySource.includes('ANDROID');
 
              return (
                  <button 
@@ -74,7 +77,12 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                         <div className="flex-1 min-w-0">
                             <h4 className="text-xs font-black text-white uppercase tracking-tight truncate">{off.name}</h4>
                             <div className="flex items-center gap-2 mt-0.5">
-                                <svg className="w-3 h-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                {/* Native App Indicator */}
+                                {isNative ? (
+                                    <svg className="w-3 h-3 text-emerald-400" fill="currentColor" viewBox="0 0 24 24"><title>Native Android Background Service</title><path d="M17.523 15.3414C17.523 15.3414 17.5644 15.3414 17.5644 15.3414C17.5644 15.3414 17.6059 15.3414 17.5644 15.3414C17.5644 15.3414 17.523 15.3414 17.523 15.3414ZM6.47696 15.3414C6.47696 15.3414 6.43542 15.3414 6.43542 15.3414C6.43542 15.3414 6.47696 15.3414 6.47696 15.3414C6.47696 15.3414 6.51849 15.3414 6.47696 15.3414ZM16.6343 11.2355C16.6343 11.2355 16.6343 11.2355 16.6343 11.2355L18.7731 7.52989C18.877 7.34718 18.8146 7.10636 18.6319 7.00255C18.4492 6.89874 18.2084 6.96102 18.1046 7.14373L15.9284 10.9158C14.7406 10.3718 13.4116 10.0562 12 10.0562C10.5884 10.0562 9.2594 10.3718 8.0716 10.9158L5.89542 7.14373C5.79161 6.96102 5.55079 6.89874 5.36809 7.00255C5.18538 7.10636 5.1231 7.34718 5.22691 7.52989L7.36569 11.2355C7.36569 11.2355 7.36569 11.2355 7.36569 11.2355C3.3375 12.3982 0.389648 15.8438 0.389648 20.0001H23.6104C23.6104 15.8438 20.6625 12.3982 16.6343 11.2355ZM6.47696 16.9234C5.97858 16.9234 5.58406 16.5289 5.58406 16.0305C5.58406 15.5322 5.97858 15.1376 6.47696 15.1376C6.97534 15.1376 7.36987 15.5322 7.36987 16.0305C7.36987 16.5289 6.97534 16.9234 6.47696 16.9234ZM17.523 16.9234C17.0247 16.9234 16.6301 16.5289 16.6301 16.0305C16.6301 15.5322 17.0247 15.1376 17.523 15.1376C18.0214 15.1376 18.4159 15.5322 18.4159 16.0305C18.4159 16.5289 18.0214 16.9234 17.523 16.9234Z" /></svg>
+                                ) : (
+                                    <svg className="w-3 h-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>
+                                )}
                                 <span className="text-[9px] font-mono text-slate-500 uppercase">{off.id}</span>
                             </div>
                         </div>
@@ -88,16 +96,10 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                     {/* Footer Metrics */}
                     <div className="flex items-center justify-between pt-2 border-t border-white/5">
                         <div className="flex items-center gap-3">
-                             {/* Signal */}
-                             <div className="flex items-center gap-1">
-                                <div className="flex gap-0.5 items-end h-2">
-                                    <div className="w-0.5 bg-cyan-500 h-1"></div>
-                                    <div className="w-0.5 bg-cyan-500 h-1.5"></div>
-                                    <div className="w-0.5 bg-cyan-500 h-2"></div>
-                                    <div className="w-0.5 bg-slate-600 h-2"></div>
-                                </div>
-                                <span className="text-[8px] font-mono text-cyan-400">4G</span>
-                             </div>
+                             {/* Source Label */}
+                             <span className={`text-[8px] font-mono font-bold ${isNative ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                {isNative ? 'APP BG' : 'WEB'}
+                             </span>
 
                              {/* Battery */}
                              <span className={`text-[8px] font-mono font-bold ${off.battery < 20 ? 'text-red-500' : 'text-slate-400'}`}>

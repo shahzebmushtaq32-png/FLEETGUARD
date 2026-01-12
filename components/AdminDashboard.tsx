@@ -79,6 +79,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                      addLog('GPS', `Node ${newOff.id} updated location`);
                 }
             }
+            // Check for source change
+            if (oldOff.telemetrySource !== newOff.telemetrySource && newOff.telemetrySource?.includes('ANDROID')) {
+                addLog('INFO', `Node ${newOff.id} switched to NATIVE BACKGROUND SERVICE`);
+            }
         } else {
              addLog('CONNECT', `New Node Detected: ${newOff.id}`);
         }
@@ -303,8 +307,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <span className={selectedOfficer.battery < 20 ? 'text-red-500' : 'text-cyan-400'}>{selectedOfficer.battery}%</span>
                             </div>
                             <div className="flex justify-between text-[9px] font-mono text-slate-400 uppercase">
-                                <span>Coordinates</span>
-                                <span className="text-slate-200">{Number(selectedOfficer.lat).toFixed(4)}, {Number(selectedOfficer.lng).toFixed(4)}</span>
+                                <span>Service Source</span>
+                                <span className={`${selectedOfficer.telemetrySource?.includes('ANDROID') ? 'text-emerald-400' : 'text-amber-400'} font-bold`}>
+                                    {selectedOfficer.telemetrySource === 'ANDROID_BG' ? 'NATIVE (BACKGROUND)' : selectedOfficer.telemetrySource || 'WEB'}
+                                </span>
                             </div>
                         </div>
 

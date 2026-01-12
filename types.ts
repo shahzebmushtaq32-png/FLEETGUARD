@@ -86,6 +86,9 @@ export interface SalesOfficer {
   avatar?: string; 
   evidence: EvidenceAsset[];
   tasks: DeploymentTask[];
+  // NEW FIELDS FOR NATIVE APP SUPPORT
+  telemetrySource?: 'WEB' | 'ANDROID_BG' | 'ANDROID_FG'; 
+  appVersion?: string;
 }
 
 export interface Message {
