@@ -7,60 +7,119 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 
-// Safer import for PG in ESM environments
 const { Pool } = pg;
 
-/**
- * RENDER REALTIME SERVER (Step 1 & 2)
- * Implementation of the "Blue Box" from your diagram.
- */
-
-const app = express();
-app.use(cors()); // Enable CORS for frontend requests
-// INCREASED LIMIT: Allow large payloads for image uploads via proxy
-app.use(express.json({ limit: '10mb' }));
-
-const server = http.createServer(app);
-// CHANGED: detached mode (noServer: true) to handle upgrade manually for Auth
-const wss = new WebSocketServer({ noServer: true });
-
+// --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
 
-// Shared Secret for Authentication
-const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122";
-const JWT_SECRET = process.env.JWT_SECRET || "bdo_super_secret_dev_key_change_in_prod";
+// SECURITY KEYS
+const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122"; 
+const JWT_SECRET = process.env.JWT_SECRET; 
 
-// Middleware to Lock R2 Access & API Endpoints
-const requireAuth = (req, res, next) => {
+if (!JWT_SECRET) {
+  console.error("🚨 CRITICAL: JWT_SECRET is missing. Authentication will fail.");
+}
+
+// --- DATABASE CONFIGURATION ---
+const getDbUrl = () => {
+  let url = process.env.NEON_DATABASE_URL;
+  if (!url) return undefined;
+  
+  // 1. Remove 'psql' command prefix if pasted accidentally
+  if (url.startsWith("psql '")) {
+    url = url.replace("psql '", "").replace("'", "");
+  }
+
+  // 2. CRITICAL FIX: Remove 'channel_binding=require'
+  if (url.includes("channel_binding=require")) {
+    console.log("⚠️ Detected channel_binding in DB URL - Removing for compatibility.");
+    url = url.replace("channel_binding=require", "");
+  }
+
+  // 3. Clean up any trailing characters left behind (?, &)
+  return url.replace(/&+/g, '&').replace(/\?&/g, '?').replace(/[?&]$/, '');
+};
+
+const pool = new Pool({
+  connectionString: getDbUrl(),
+  ssl: { rejectUnauthorized: false } // Required for Neon
+});
+
+// --- STORAGE CONFIGURATION (R2) ---
+const getR2Endpoint = () => {
+  if (process.env.R2_ENDPOINT) return process.env.R2_ENDPOINT.trim();
+  if (process.env.R2_ACCOUNT_ID) return `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+  return undefined;
+};
+
+const r2Config = {
+  region: 'auto',
+  endpoint: getR2Endpoint(),
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+  },
+};
+const r2 = new S3Client(r2Config);
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// --- LOGGING MIDDLEWARE ---
+app.use((req, res, next) => {
+  console.log(`[API Request] ${req.method} ${req.url}`);
+  next();
+});
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+// --- STRICT SECURITY MIDDLEWARE ---
+
+const requireApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'] || req.query.key;
-  if (apiKey !== WS_API_KEY) {
-    console.warn(`[Security] Unauthorized Access Attempt from ${req.ip}`);
-    return res.status(401).json({ error: 'Unauthorized: Missing or Invalid API Key' });
+  if (!apiKey || apiKey !== WS_API_KEY) {
+    console.warn(`[Security] Blocked unauthorized gateway access from ${req.ip}`);
+    return res.status(401).json({ error: 'Gateway Unauthorized: Invalid API Key' });
   }
   next();
 };
 
-// Step 2: Neon PostgreSQL Connection
-const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL || 'postgresql://neondb_owner:npg_bzq8XLNUV6YG@ep-tiny-king-ahricq41-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require',
-  ssl: { rejectUnauthorized: false }
-});
+const authenticateToken = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'] || req.query.key;
+  if (apiKey !== WS_API_KEY) {
+    return res.status(401).json({ error: 'Gateway Unauthorized' });
+  }
 
-// INITIALIZATION: Ensure Database Tables Exist
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.status(401).json({ error: 'Session Unauthorized: Token Missing' });
+  if (!JWT_SECRET) return res.status(500).json({ error: 'Server Security Misconfiguration' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Session Forbidden: Invalid Token' });
+    req.user = user;
+    next();
+  });
+};
+
+const requireRole = (allowedRoles) => (req, res, next) => {
+    if (req.user.role === 'Admin') return next();
+    if (!allowedRoles.includes(req.user.role)) {
+        return res.status(403).json({ error: 'Forbidden: Insufficient Permissions' });
+    }
+    next();
+};
+
+// --- DATABASE INITIALIZATION ---
 const initDB = async () => {
   try {
-    // 1. Location History Table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS location_history (
-        id SERIAL PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        lat DOUBLE PRECISION,
-        lng DOUBLE PRECISION,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    // Attempt connection
+    await pool.query('SELECT 1');
+    console.log("✅ Database Connection: Active");
 
-    // 2. Officers/Users Table (New for Persistence)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS officers (
         id TEXT PRIMARY KEY,
@@ -68,76 +127,63 @@ const initDB = async () => {
         password TEXT NOT NULL,
         role TEXT DEFAULT 'Account Executive',
         avatar TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        status TEXT DEFAULT 'Offline',
+        battery INTEGER DEFAULT 100,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
     
-    // 3. Seed Admin User if not exists
     await pool.query(`
-      INSERT INTO officers (id, name, password, role)
-      VALUES ('admin', 'Administrator', 'admin', 'Admin')
+      CREATE TABLE IF NOT EXISTS location_history (
+        id SERIAL PRIMARY KEY,
+        node_id TEXT REFERENCES officers(id),
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Seed Data
+    await pool.query(`
+      INSERT INTO officers (id, name, password, role, status)
+      VALUES 
+      ('admin', 'Administrator', 'admin', 'Admin', 'Active'),
+      ('n1', 'James Wilson', '12345', 'Senior BDO', 'Offline')
       ON CONFLICT (id) DO NOTHING;
     `);
 
-    console.log("✅ Database: Tables verified (location_history, officers).");
+    console.log("✅ Database: Tables Synced & Ready.");
   } catch (err) {
-    console.error("❌ Database Initialization Error:", err);
+    console.error("❌ Database Init Failed:", err.message);
   }
 };
 initDB();
 
-// Step 3: Cloudflare R2 Configuration (S3 Compatible)
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "225bfea5d72cd356fb8697c55d29254c";
-const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || "bdo-fleet-data";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "b8a044d9823caf1e27850bcc6806f057";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "fd3e97181324351cec47f3fc27274aa3da02d320714a4745fbc608906887dd48";
+// --- REST API ENDPOINTS ---
 
-const r2 = new S3Client({
-  region: 'auto',
-  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: R2_ACCESS_KEY_ID,
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
-  },
-});
+app.get('/', (req, res) => res.status(200).send('FleetGuard Realtime Server Active'));
+app.get('/health', (req, res) => res.status(200).send('FleetGuard Online'));
 
-console.log(`[R2] Storage Service initialized.`);
-
-// Health check endpoint for Render
-app.get('/health', (req, res) => {
-  res.status(200).send('Healthy');
-});
-
-// --- API ENDPOINTS ---
-
-/**
- * AUTHENTICATION (JWT)
- */
-app.post('/api/login', requireAuth, async (req, res) => {
+app.post('/api/login', requireApiKey, async (req, res) => {
   const { id, password } = req.body;
-  
   try {
-    // 1. Check DB for user
     const result = await pool.query('SELECT * FROM officers WHERE id = $1', [id]);
     const user = result.rows[0];
 
-    // 2. Validate Credentials (Simple plaintext for demo, hash in prod!)
     if (!user || user.password !== password) {
-      return res.status(401).json({ error: 'Invalid ID or Password' });
+      return res.status(401).json({ error: 'Invalid Credentials' });
     }
 
-    // 3. Sign JWT
+    if (!JWT_SECRET) throw new Error("JWT_SECRET not configured on server");
+
     const token = jwt.sign(
-      { 
-        id: user.id, 
-        role: user.role, 
-        name: user.name 
-      }, 
+      { id: user.id, role: user.role, name: user.name }, 
       JWT_SECRET, 
       { expiresIn: '12h' }
     );
 
-    // 4. Return Session Data
     res.json({
       token,
       user: {
@@ -147,57 +193,37 @@ app.post('/api/login', requireAuth, async (req, res) => {
         avatar: user.avatar
       }
     });
-
   } catch (err) {
-    console.error("Login Error:", err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error("❌ Login Error:", err.message); // This will show in Render Logs
+    res.status(500).json({ error: 'Internal Server Error', details: err.message });
   }
 });
 
-/**
- * GET ALL OFFICERS
- */
-app.get('/api/officers', requireAuth, async (req, res) => {
+app.get('/api/officers', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM officers');
-    const officers = result.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      password: row.password,
-      role: row.role,
-      avatar: row.avatar,
-      lat: 14.5547, lng: 121.0244,
-      battery: 100, signalStrength: 100, networkType: '5G',
-      status: 'Offline', lastUpdate: new Date(),
-      leads: [], history: [], evidence: [], tasks: [],
-      pipelineValue: 0, visitCount: 0, quotaProgress: 0,
-      qrOnboarded: 0, qrActivated: 0, qrVolume: 0
+    const officers = result.rows.map(o => ({
+      ...o,
+      lastUpdate: o.last_update,
+      networkType: '5G', 
+      leads: [], history: [], evidence: [], tasks: []
     }));
     res.json(officers);
   } catch (err) {
     console.error("Fetch Officers Error:", err);
-    res.status(500).json({ error: 'Failed to fetch officers' });
+    res.status(500).json({ error: 'Database Fetch Error' });
   }
 });
 
-/**
- * ADD NEW OFFICER
- */
-app.post('/api/officers', requireAuth, async (req, res) => {
+app.post('/api/officers', authenticateToken, requireRole(['Admin']), async (req, res) => {
   const { id, name, password, role, avatar } = req.body;
   try {
     await pool.query(
       'INSERT INTO officers (id, name, password, role, avatar) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
       [id, name, password, role, avatar]
     );
-    
     const newOfficer = { id, name, role, avatar, status: 'Offline' };
-    wss.clients.forEach(client => {
-       if (client.readyState === WebSocket.OPEN && client.clientType === 'dashboard') {
-         client.send(JSON.stringify({ type: 'ROSTER_UPDATE', payload: newOfficer }));
-       }
-    });
-
+    broadcast({ type: 'ROSTER_UPDATE', payload: newOfficer });
     res.json({ success: true });
   } catch (err) {
     console.error("Add Officer Error:", err);
@@ -205,152 +231,131 @@ app.post('/api/officers', requireAuth, async (req, res) => {
   }
 });
 
-/**
- * DELETE OFFICER
- */
-app.delete('/api/officers/:id', requireAuth, async (req, res) => {
-  const { id } = req.params;
+app.delete('/api/officers/:id', authenticateToken, requireRole(['Admin']), async (req, res) => {
   try {
-    await pool.query('DELETE FROM officers WHERE id = $1', [id]);
+    await pool.query('DELETE FROM officers WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
-    console.error("Delete Officer Error:", err);
     res.status(500).json({ error: 'Failed to delete officer' });
   }
 });
 
-/**
- * HISTORY API ENDPOINT
- */
-app.get('/api/history/:nodeId', requireAuth, async (req, res) => {
-  const { nodeId } = req.params;
-  
+app.get('/api/history/:nodeId', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT lat, lng, timestamp FROM location_history WHERE node_id = $1 ORDER BY timestamp DESC LIMIT 100',
-      [nodeId]
+      [req.params.nodeId]
     );
     res.json(result.rows.reverse());
   } catch (err) {
-    console.error("History Fetch Error:", err);
-    res.status(500).json({ error: 'Database fetch failed' });
+    res.status(500).json({ error: 'History Fetch Error' });
   }
 });
 
-/**
- * UPLOAD PROXY ENDPOINT
- */
-app.post('/api/upload-proxy', requireAuth, async (req, res) => {
-  const { fileName, fileType, fileData } = req.body;
+app.post('/api/upload-proxy', authenticateToken, async (req, res) => {
+  const { fileName, fileData } = req.body;
+  if (!fileName || !fileData) return res.status(400).json({ error: "Missing data" });
 
-  if (!fileName || !fileData) {
-    return res.status(400).json({ error: 'Missing fileName or fileData' });
+  const endpoint = getR2Endpoint();
+  if (!endpoint) {
+    console.error("R2 Endpoint Config Missing");
+    return res.status(503).json({ error: "Storage Service Unavailable" });
   }
 
-  const safeFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const key = `evidence/${Date.now()}_${safeFileName}`;
-
+  const key = `evidence/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  const bucketName = process.env.R2_BUCKET_NAME || 'bdo-fleet-assets';
+  
   try {
     const buffer = Buffer.from(fileData.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-
-    const putCommand = new PutObjectCommand({
-      Bucket: R2_BUCKET_NAME,
+    
+    await r2.send(new PutObjectCommand({
+      Bucket: bucketName,
       Key: key,
       Body: buffer,
-      ContentType: fileType || 'image/jpeg',
-    });
+      ContentType: 'image/jpeg'
+    }));
     
-    await r2.send(putCommand);
+    const url = await getSignedUrl(r2, new GetObjectCommand({
+      Bucket: bucketName, 
+      Key: key
+    }), { expiresIn: 604800 }); 
 
-    const getCommand = new GetObjectCommand({
-        Bucket: R2_BUCKET_NAME,
-        Key: key
-    });
-    
-    const readUrl = await getSignedUrl(r2, getCommand, { expiresIn: 3600 * 24 * 7 });
-
-    res.json({
-      success: true,
-      publicUrl: readUrl,
-      key: key
-    });
-
+    res.json({ publicUrl: url });
   } catch (err) {
-    console.error("R2 Upload Proxy Error:", err);
-    res.status(500).json({ error: 'Failed to upload file to storage.' });
+    console.error("R2 Upload Failed:", err);
+    res.status(500).json({ error: 'Storage Upload Failed', details: err.message });
   }
 });
 
-/**
- * WEBSOCKET HEARTBEAT & AUTHENTICATION
- */
-function heartbeat() {
-  this.isAlive = true;
-}
+// --- WEBSOCKET SERVER ---
 
-const interval = setInterval(function ping() {
-  wss.clients.forEach(function each(ws) {
+const broadcast = (msg) => {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN && client.clientType === 'dashboard') {
+      client.send(JSON.stringify(msg));
+    }
+  });
+};
+
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const clientKey = url.searchParams.get('key');
+  
+  if (clientKey !== WS_API_KEY) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
+});
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  ws.clientType = url.searchParams.get('type') || 'iot';
+  ws.isAlive = true;
+  ws.on('pong', () => ws.isAlive = true);
+
+  ws.on('message', async (msg) => {
+    try {
+      const data = JSON.parse(msg);
+      if (data.type === 'TELEMETRY') {
+        const { id, lat, lng, battery, status } = data.payload;
+        
+        await pool.query(
+          `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5`,
+          [lat, lng, battery, status, id]
+        );
+
+        await pool.query(
+          'INSERT INTO location_history (node_id, lat, lng) VALUES ($1, $2, $3)',
+          [id, lat, lng]
+        );
+
+        broadcast([data.payload]);
+      }
+    } catch (e) {
+      console.error('Socket Message Error:', e);
+    }
+  });
+});
+
+const interval = setInterval(() => {
+  wss.clients.forEach(ws => {
     if (ws.isAlive === false) return ws.terminate();
     ws.isAlive = false;
     ws.ping();
   });
 }, 30000);
 
-wss.on('close', function close() {
-  clearInterval(interval);
+wss.on('close', () => clearInterval(interval));
+
+// Catch-all for 404s
+app.use((req, res) => {
+    console.log(`[404] Not Found: ${req.url}`);
+    res.status(404).json({ error: `Route not found: ${req.url}` });
 });
 
-server.on('upgrade', (request, socket, head) => {
-  const url = new URL(request.url, `http://${request.headers.host}`);
-  const clientKey = url.searchParams.get('key');
-
-  if (clientKey !== WS_API_KEY) {
-    console.warn(`[Auth] Rejected WebSocket connection attempt: Invalid Key`);
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
-});
-
-wss.on('connection', (ws, req) => {
-  ws.isAlive = true;
-  ws.on('pong', heartbeat);
-
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientType = url.searchParams.get('type') || 'iot'; 
-  ws.clientType = clientType;
-
-  console.log(`[Step 1] Authorized ${clientType.toUpperCase()} node Connected.`);
-
-  ws.on('message', async (message) => {
-    try {
-      const data = JSON.parse(message);
-      
-      if (data.type === 'TELEMETRY') {
-        const { id, lat, lng } = data.payload;
-        try {
-            await pool.query(
-            'INSERT INTO location_history (node_id, lat, lng) VALUES ($1, $2, $3)',
-            [id, lat, lng]
-            );
-        } catch(e) { console.error("DB Save Error:", e); }
-
-        wss.clients.forEach((client) => {
-          if (client !== ws && client.readyState === WebSocket.OPEN && client.clientType === 'dashboard') {
-            client.send(JSON.stringify([data.payload]));
-          }
-        });
-      }
-    } catch (err) {
-      console.error("Error processing telemetry:", err);
-    }
-  });
-});
-
-server.listen(PORT, () => {
-  console.log(`Render Realtime Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`🚀 FleetGuard Server running on port ${PORT}`));

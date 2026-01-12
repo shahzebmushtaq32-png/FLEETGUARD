@@ -1,104 +1,97 @@
 import { SalesOfficer, Message } from "../types";
 
-/**
- * ARCHITECTURE STEP 3: Cloudflare R2 Storage Layer
- */
-
-const FALLBACK_API_KEY = "BDO_SECURE_NODE_99122";
+// Fallbacks are for local development ONLY.
 const FALLBACK_API_URL = "https://fleetguard-hrwf.onrender.com";
+const FALLBACK_API_KEY = "BDO_SECURE_NODE_99122";
 
-const WS_API_KEY = (typeof process !== 'undefined' && process.env && process.env.WS_API_KEY) 
+// Robustly get the API Key from the environment or fallback
+const WS_API_KEY = (typeof process !== 'undefined' && process.env.WS_API_KEY) 
   ? process.env.WS_API_KEY 
   : FALLBACK_API_KEY;
 
 const getApiUrl = () => {
     let envUrl = '';
-    if (typeof process !== 'undefined' && process.env && process.env.VITE_RENDER_WS_URL) {
-        envUrl = process.env.VITE_RENDER_WS_URL;
+    // Check various possible locations for the URL
+    if (typeof process !== 'undefined' && process.env) {
+       envUrl = process.env.VITE_RENDER_WS_URL || '';
     }
     
+    // If no env var, use fallback
     if (!envUrl) return FALLBACK_API_URL;
+    
+    // Ensure HTTP for REST and strip trailing slashes to prevent //api/login
     let finalUrl = envUrl;
     if (!finalUrl.startsWith('http')) finalUrl = `https://${finalUrl}`;
-    return finalUrl.replace('wss://', 'https://');
+    
+    return finalUrl
+      .replace('wss://', 'https://')
+      .replace('ws://', 'http://')
+      .replace(/\/$/, ''); // Remove trailing slash
 };
 
 const API_URL = getApiUrl();
 
+// Helper: Constructs headers with both Gateway Key and User Session Token
+const getHeaders = () => {
+  const token = localStorage.getItem('bdo_auth_token');
+  return {
+    'Content-Type': 'application/json',
+    'x-api-key': WS_API_KEY,      // Layer 1: Gateway Access
+    'Authorization': token ? `Bearer ${token}` : '' // Layer 2: User Session
+  };
+};
+
 export const persistenceService = {
-  // NEW: Real JWT Login
+  // Public Endpoint (Only requires Gateway Key)
   login: async (id: string, password: string) => {
-    console.log(`[Auth] Attempting login for ${id} at ${API_URL}`);
+    const url = `${API_URL}/api/login`;
+    console.log(`[Auth] Attempting login at: ${url}`);
+    
     try {
-      const response = await fetch(`${API_URL}/api/login`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 
             'Content-Type': 'application/json',
-            'x-api-key': WS_API_KEY
+            'x-api-key': WS_API_KEY 
         },
         body: JSON.stringify({ id, password })
       });
 
       if (!response.ok) {
-        throw new Error('Invalid Credentials');
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || `Server Error: ${response.status} (${response.statusText})`);
       }
-
-      return await response.json(); // { token, user }
-    } catch (e) {
-      console.error("Login Failed:", e);
-      throw e;
+      return await response.json();
+    } catch (error: any) {
+      console.error("[Auth] Login request failed:", error);
+      throw error;
     }
   },
 
-  saveToCloudR2: async (officers: SalesOfficer[]) => {
-    console.group(`[Architecture Step 3] Cloudflare R2 Storage Commit`);
-    const payload = officers.map(o => ({
-      bucket: 'bdo-fleet-data',
-      key: `logs/${o.id}_${Date.now()}.json`,
-      content: {
-        bdo_code: o.id,
-        bdo_name: o.name,
-        technical_telemetry: {
-            lat: o.lat, lng: o.lng,
-            battery: o.battery,
-            signal: o.signalStrength,
-            network: o.networkType
-        },
-        status: o.status
-      }
-    }));
-
-    return new Promise(resolve => {
-      setTimeout(() => {
-        console.log(`[R2] PUT Objects:`, payload);
-        console.groupEnd();
-        resolve(true);
-      }, 400);
-    });
-  },
-
+  // Protected Endpoint (Requires Gateway Key + JWT)
   fetchOfficersAPI: async (): Promise<SalesOfficer[]> => {
     try {
         const response = await fetch(`${API_URL}/api/officers`, {
-            headers: { 'x-api-key': WS_API_KEY }
+            headers: getHeaders()
         });
-        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        
+        if (response.status === 401 || response.status === 403) {
+            console.warn("Auth Session Expired");
+            return [];
+        }
+
+        if (!response.ok) throw new Error(`Server Error: ${response.status}`);
+        
         const data = await response.json();
         return data.map((o: any) => ({
             ...o,
-            lastUpdate: new Date(o.lastUpdate || Date.now())
+            lastUpdate: new Date(o.last_update || o.lastUpdate || Date.now())
         }));
     } catch (e) {
-        console.error("API Fetch Error:", e);
+        console.error("Fetch API Error:", e);
+        // Offline Fallback
         const data = localStorage.getItem('bdo_fleet_cache');
-        if (data) {
-             return JSON.parse(data, (key, value) => {
-                if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
-                    return new Date(value);
-                }
-                return value;
-            });
-        }
+        if (data) return JSON.parse(data);
         return [];
     }
   },
@@ -107,32 +100,27 @@ export const persistenceService = {
      try {
         await fetch(`${API_URL}/api/officers`, {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'x-api-key': WS_API_KEY
-            },
+            headers: getHeaders(),
             body: JSON.stringify(officer)
         });
-     } catch (e) {
-        console.error("Add Officer API Failed", e);
-     }
+     } catch (e) { console.error("Add Officer Failed", e); }
   },
 
   deleteOfficerAPI: async (id: string) => {
      try {
         await fetch(`${API_URL}/api/officers/${id}`, {
             method: 'DELETE',
-            headers: { 'x-api-key': WS_API_KEY }
+            headers: getHeaders()
         });
-     } catch (e) {
-        console.error("Delete Officer API Failed", e);
-     }
+     } catch (e) { console.error("Delete Officer Failed", e); }
+  },
+
+  saveToCloudR2: async (officers: SalesOfficer[]) => {
+      // Logic handled via Realtime WebSocket & DB Sync
   },
 
   saveOfficers: (officers: SalesOfficer[]) => {
-    try {
-        localStorage.setItem('bdo_fleet_cache', JSON.stringify(officers));
-    } catch (e) {}
+    localStorage.setItem('bdo_fleet_cache', JSON.stringify(officers));
   },
 
   saveMessage: (msg: Message) => {
@@ -149,7 +137,7 @@ export const persistenceService = {
   processSyncQueue: async () => {
     const queue = JSON.parse(localStorage.getItem('bdo_offline_queue') || '[]');
     if (queue.length === 0) return;
-    await new Promise(r => setTimeout(r, 1000));
+    console.log("Processing Offline Queue:", queue.length);
     localStorage.removeItem('bdo_offline_queue');
   }
 };

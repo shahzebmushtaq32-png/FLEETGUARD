@@ -5,7 +5,7 @@ import { SalesOfficer } from "../types";
  * Server: Render Realtime Server (Node.js, Express)
  */
 
-const DEFAULT_WS_URL = "wss://fleetguard-hrwf.onrender.com";
+const FALLBACK_URL = "wss://fleetguard-hrwf.onrender.com";
 const FALLBACK_API_KEY = "BDO_SECURE_NODE_99122";
 
 // Accessing polyfilled process.env from vite.config.ts
@@ -28,6 +28,7 @@ class SocketService {
     const saved = localStorage.getItem('bdo_fleet_ws_url');
     if (saved) return saved.startsWith('ws') ? saved : `wss://${saved}`;
     
+    // Check environment variable
     let envUrl = '';
     if (typeof process !== 'undefined' && process.env && process.env.VITE_RENDER_WS_URL) {
       envUrl = process.env.VITE_RENDER_WS_URL;
@@ -37,7 +38,7 @@ class SocketService {
       return envUrl.replace('https://', 'wss://').replace('http://', 'ws://');
     }
 
-    return DEFAULT_WS_URL;
+    return FALLBACK_URL;
   }
 
   async connect(role: 'dashboard' | 'iot', onStatusChange: (s: ConnectionStatus) => void) {
@@ -49,12 +50,6 @@ class SocketService {
     console.log(`[Step 1] Attempting authenticated connection to: ${url} as ${role}`);
 
     try {
-      if (!WS_API_KEY) {
-        console.error("Connection Aborted: Missing WS_API_KEY");
-        this.updateStatus('Error');
-        return;
-      }
-
       this.socket = new WebSocket(`${url}?key=${WS_API_KEY}&type=${role}`);
 
       this.socket.onopen = () => {
