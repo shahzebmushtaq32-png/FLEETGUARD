@@ -39,7 +39,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({ evidence }) => {
           </div>
 
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase tracking-widest">
-            <span>Lat: {asset.location.lat.toFixed(4)}</span>
+            <span>Lat: {asset.location ? asset.location.lat.toFixed(4) : 'N/A'}</span>
             <span>{asset.timestamp.toLocaleTimeString()}</span>
           </div>
         </div>

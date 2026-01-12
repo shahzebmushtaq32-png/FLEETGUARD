@@ -130,15 +130,52 @@ export const persistenceService = {
   },
 
   queueAction: (action: string, payload: any) => {
-    const queue = JSON.parse(localStorage.getItem('bdo_offline_queue') || '[]');
-    queue.push({ id: Date.now(), action, payload, timestamp: new Date() });
-    localStorage.setItem('bdo_offline_queue', JSON.stringify(queue));
+    try {
+        const queue = JSON.parse(localStorage.getItem('bdo_offline_queue') || '[]');
+        queue.push({ id: Date.now(), action, payload, timestamp: new Date() });
+        
+        // Quota Protection: If queue gets too big, drop oldest items
+        if (queue.length > 100) {
+            queue.shift(); 
+        }
+
+        localStorage.setItem('bdo_offline_queue', JSON.stringify(queue));
+    } catch (e) {
+        console.error("Offline Queue Full/Error", e);
+        // If quota exceeded, try clearing old cache
+        localStorage.removeItem('bdo_fleet_cache'); 
+    }
   },
 
-  processSyncQueue: async () => {
-    const queue = JSON.parse(localStorage.getItem('bdo_offline_queue') || '[]');
+  processSyncQueue: async (handler?: (action: string, payload: any) => Promise<void> | void) => {
+    const rawQueue = localStorage.getItem('bdo_offline_queue');
+    if (!rawQueue) return;
+
+    const queue = JSON.parse(rawQueue);
     if (queue.length === 0) return;
-    console.log("Processing Offline Queue:", queue.length);
+    
+    console.log(`[Sync] Processing ${queue.length} offline actions...`);
+    
+    // If no handler provided, we can't execute, so we abort to save data
+    if (!handler) {
+        console.warn("[Sync] No handler provided, skipping sync.");
+        return;
+    }
+
+    // Process all items
+    // Note: We process them sequentially to ensure order (e.g. status changes)
+    for (const item of queue) {
+        try {
+            await handler(item.action, item.payload);
+            // Small delay to prevent socket flooding
+            await new Promise(r => setTimeout(r, 50));
+        } catch (e) {
+            console.error(`[Sync] Failed to sync item ${item.id}`, e);
+        }
+    }
+    
+    // Clear queue after processing attempt
+    console.log("[Sync] Queue flushed.");
     localStorage.removeItem('bdo_offline_queue');
   }
 };

@@ -25,11 +25,15 @@ const API_URL = getApiUrl();
 export const r2Service = {
   uploadEvidence: async (base64Data: string, fileName: string): Promise<string> => {
     try {
+      // FIX: Retrieve the JWT token from storage to pass authentication
+      const token = localStorage.getItem('bdo_auth_token');
+      
       const response = await fetch(`${API_URL}/api/upload-proxy`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': WS_API_KEY
+            'x-api-key': WS_API_KEY,
+            'Authorization': token ? `Bearer ${token}` : ''
         },
         body: JSON.stringify({
             fileName,
@@ -37,11 +41,17 @@ export const r2Service = {
             fileData: base64Data
         })
       });
-      if (!response.ok) throw new Error('Proxy Upload Failed');
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Proxy Upload Failed: ${response.status}`);
+      }
+
       const result = await response.json();
       return result.publicUrl;
     } catch (error) {
       console.error('[R2] Upload Error:', error);
+      // Fallback: Return the local base64 so the UI doesn't break, even if upload fails
       return base64Data; 
     }
   },

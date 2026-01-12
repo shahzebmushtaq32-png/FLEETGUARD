@@ -1,4 +1,5 @@
 import { SalesOfficer } from "../types";
+import { persistenceService } from "./persistenceService";
 
 /**
  * ARCHITECTURE STEP 1: Persistent WebSocket Handshake
@@ -122,13 +123,19 @@ class SocketService {
     this.onRosterUpdateCallback = callback;
   }
 
-  sendTelemetry(officer: Partial<SalesOfficer>) {
+  sendTelemetry(officer: Partial<SalesOfficer>, bypassQueue = false) {
+    // 1. Online: Send immediately
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({
         type: 'TELEMETRY',
         payload: officer,
         timestamp: new Date().toISOString()
       }));
+    } 
+    // 2. Offline: Queue it (unless we are currently processing the queue, preventing infinite loops)
+    else if (!bypassQueue) {
+      console.warn("⚠️ Socket disconnected. Queuing telemetry action.");
+      persistenceService.queueAction('TELEMETRY', officer);
     }
   }
 

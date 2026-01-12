@@ -40,39 +40,40 @@ const App: React.FC = () => {
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // 1. Initial Load: Fetch from DB
+  // 1. Data Fetching Strategy: Trigger on Load AND on Auth Change
   useEffect(() => {
-    const loadOfficers = async () => {
-        try {
-            const data = await persistenceService.fetchOfficersAPI();
-            if (data && data.length > 0) {
-                setOfficers(data);
-            } else {
-                // If DB is empty, use mock for demo
-                setOfficers([INITIAL_OFFICER_TEMPLATE]);
+    // We only attempt to fetch if we have a token (implied by user existence or local check)
+    // But checking 'user' state is the most reliable react way to know we are "logged in"
+    if (user) {
+        const loadOfficers = async () => {
+            console.log("[App] Fetching latest fleet data...");
+            try {
+                const data = await persistenceService.fetchOfficersAPI();
+                
+                if (Array.isArray(data)) {
+                    console.log(`[App] Loaded ${data.length} officers from API`);
+                    setOfficers(data);
+                } else {
+                    console.warn("[App] API returned invalid data format");
+                }
+            } catch (e) {
+                console.error("[App] Failed to load officers", e);
             }
-        } catch (e) {
-            console.error("Failed to load officers", e);
-            setOfficers([INITIAL_OFFICER_TEMPLATE]);
-        }
-    };
-    loadOfficers();
-  }, []);
+        };
+        loadOfficers();
+    }
+  }, [user]); // CRITICAL FIX: Run this when 'user' changes (Login success)
 
   // Native App Feature: Offline Detection & Sync
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      persistenceService.processSyncQueue();
+      // We don't sync here immediately. We wait for WS to connect (see below)
     };
     const handleOffline = () => setIsOnline(false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-
-    if (navigator.onLine) {
-        persistenceService.processSyncQueue();
-    }
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -89,6 +90,7 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(session);
         if (parsed.expiresAt > Date.now()) {
+            console.log("[App] Restoring session for", parsed.username);
             setUser({
                 id: parsed.role === 'Admin' ? 'ADM-ROOT' : parsed.officerId,
                 username: parsed.username,
@@ -105,27 +107,35 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Secure Connection Logic: Only connect when authenticated
+  // Secure Connection Logic & SYNC HANDLER
   useEffect(() => {
     if (user) {
       const role = user.role === 'Admin' ? 'dashboard' : 'iot';
       socketService.connect(role, (status) => setWsStatus(status));
       
       socketService.onDeviceUpdate((updates) => {
-        setOfficers(prev => prev.map(off => {
-          const update = updates.find(u => u.id === off.id);
-          if (update) return { ...off, ...update, lastUpdate: new Date() };
-          return off;
-        }));
+        setOfficers(prev => {
+            const newOfficers = [...prev];
+            updates.forEach(update => {
+                const index = newOfficers.findIndex(o => o.id === update.id);
+                if (index !== -1) {
+                    newOfficers[index] = { ...newOfficers[index], ...update, lastUpdate: new Date() };
+                } else {
+                    // If we receive an update for an officer we don't have, we should probably fetch or add them.
+                    // For now, let's wait for Roster Update or next fetch.
+                }
+            });
+            return newOfficers;
+        });
       });
 
       // Handle Roster Updates (When new BDO is added by another admin)
       socketService.onRosterUpdate((newOfficer) => {
-          // Check if already exists
+          console.log("[App] Roster Update Received:", newOfficer);
           setOfficers(prev => {
               if (prev.find(o => o.id === newOfficer.id)) return prev;
               const fullOfficer: SalesOfficer = {
-                  ...INITIAL_OFFICER_TEMPLATE, // Use template defaults
+                  ...INITIAL_OFFICER_TEMPLATE, // Use template defaults for missing props
                   ...newOfficer,
                   leads: [],
                   history: []
@@ -139,6 +149,18 @@ const App: React.FC = () => {
       if (!user) socketService.disconnect();
     }
   }, [user]);
+
+  // SYNC ENGINE: Flushes queue when WebSocket comes Alive
+  useEffect(() => {
+    if (wsStatus === 'Broadcasting_Live') {
+        persistenceService.processSyncQueue(async (action, payload) => {
+             if (action === 'TELEMETRY') {
+                 // Pass 'true' to bypass the queue since we are now live
+                 socketService.sendTelemetry(payload, true);
+             }
+        });
+    }
+  }, [wsStatus]);
 
   const handleLogin = (username: string, role: UserRole, officerId?: string) => {
     setUser({
@@ -187,7 +209,6 @@ const App: React.FC = () => {
     
     // Save to Cache
     persistenceService.saveOfficers(updatedList);
-    persistenceService.saveToCloudR2(updatedList);
   };
 
   const handleDeleteBDO = async (id: string) => {

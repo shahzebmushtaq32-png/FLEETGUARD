@@ -19,6 +19,13 @@ interface AdminDashboardProps {
   wsStatus?: string;
 }
 
+interface LogEntry {
+    id: number;
+    time: string;
+    type: 'INFO' | 'ALERT' | 'CONNECT' | 'GPS';
+    msg: string;
+}
+
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   officers: initialOfficers, onLogout, onAddBDO, onDeleteBDO, onAssignTask, wsStatus 
 }) => {
@@ -34,8 +41,47 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newBdoAvatar, setNewBdoAvatar] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
-  // Sync props
+  // Modal State for Tasks
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskTarget, setTaskTarget] = useState('');
+
+  // Operational Logs
+  const [showLogs, setShowLogs] = useState(false);
+  const [systemLogs, setSystemLogs] = useState<LogEntry[]>([]);
+
+  // Add a log entry helper
+  const addLog = (type: 'INFO' | 'ALERT' | 'CONNECT' | 'GPS', msg: string) => {
+      setSystemLogs(prev => [
+          { id: Date.now(), time: new Date().toLocaleTimeString(), type, msg },
+          ...prev
+      ].slice(0, 50)); // Keep last 50 logs
+  };
+
+  // Monitor WebSocket Status changes for logs
   useEffect(() => {
+      addLog('CONNECT', `System Link Status: ${wsStatus}`);
+  }, [wsStatus]);
+
+  // Monitor Officer Updates for logs
+  useEffect(() => {
+    // Diff check to see if officers updated significantly (simple version)
+    initialOfficers.forEach(newOff => {
+        const oldOff = officers.find(o => o.id === newOff.id);
+        if (oldOff) {
+            if (oldOff.status !== newOff.status) {
+                addLog('INFO', `Node ${newOff.id} changed status to ${newOff.status}`);
+            }
+            if (oldOff.lat !== newOff.lat || oldOff.lng !== newOff.lng) {
+                // Only log GPS moves if selected or occasionally to avoid spam
+                if (selectedId === newOff.id) {
+                     addLog('GPS', `Node ${newOff.id} updated location`);
+                }
+            }
+        } else {
+             addLog('CONNECT', `New Node Detected: ${newOff.id}`);
+        }
+    });
     setOfficers(initialOfficers);
   }, [initialOfficers]);
 
@@ -65,9 +111,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onAddBDO(newBdoName, newBdoCode, newBdoPass, newBdoAvatar);
       setNewBdoName(''); setNewBdoCode(''); setNewBdoPass(''); setNewBdoAvatar('');
       setShowProvisionModal(false);
+      addLog('INFO', `Provisioned new node: ${newBdoCode}`);
     } else {
       alert("Missing fields.");
     }
+  };
+
+  const handleDeployTask = () => {
+      if (taskTitle && taskTarget) {
+          onAssignTask(taskTarget, taskTitle);
+          setTaskTitle('');
+          setTaskTarget('');
+          setShowTaskModal(false);
+          addLog('INFO', `Directive sent to Node ${taskTarget}: ${taskTitle}`);
+      } else {
+          alert("Please select a target node and enter a mission directive.");
+      }
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,8 +139,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             try {
               const r2Url = await r2Service.uploadEvidence(base64, file.name);
               setNewBdoAvatar(r2Url);
+              addLog('INFO', 'Identity asset uploaded to R2');
             } catch (err) {
               setNewBdoAvatar(base64);
+              addLog('ALERT', 'R2 Upload failed, using local cache');
             } finally {
               setIsUploading(false);
             }
@@ -91,8 +152,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const selectedOfficer = officers.find(o => o.id === selectedId);
-
-  // Stats for Header
   const activeCount = officers.filter(o => o.status === 'Active' || o.status === 'On Duty').length;
   const breakCount = officers.filter(o => o.status === 'Break' || o.status === 'Meeting').length;
   const totalCount = officers.length;
@@ -102,7 +161,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       
       {/* --- TOP HEADER BAR --- */}
       <header className="h-16 bg-[#1e293b] border-b border-white/5 flex items-center justify-between px-6 z-20 shadow-xl">
-        {/* Left: Branding & System Status */}
         <div className="flex items-center gap-8">
             <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/50 flex items-center justify-center text-cyan-400">
@@ -117,35 +175,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
             </div>
 
-            <div className="hidden md:flex gap-1 bg-[#0f172a] p-1 rounded-lg border border-white/5">
-                <div className="flex items-center gap-2 px-3 py-1 bg-[#1e293b] rounded border border-white/5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">Primary: Supabase</span>
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1 rounded opacity-50">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-                    <span className="text-[9px] font-bold text-slate-500 uppercase">Mirror: Neon</span>
-                </div>
+            {/* ACTION BUTTONS (New) */}
+            <div className="hidden md:flex items-center gap-3">
+                <button 
+                    onClick={() => setShowProvisionModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/50 transition-all group"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>
+                    <span className="text-[10px] font-black uppercase tracking-widest">Provision Node</span>
+                </button>
+                <button 
+                    onClick={() => setShowTaskModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-all group"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                    <span className="text-[10px] font-black uppercase tracking-widest">Deploy Task</span>
+                </button>
             </div>
         </div>
 
-        {/* Center: Grid Stats */}
-        <div className="hidden lg:flex items-center gap-px bg-[#0f172a] border border-white/5 rounded-xl overflow-hidden">
-            <div className="px-6 py-2 bg-[#1e293b]/50 border-r border-white/5">
-                <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mb-0.5">Nodes Active</p>
-                <p className="text-xl font-mono text-emerald-400 font-bold text-center">{activeCount}</p>
-            </div>
-            <div className="px-6 py-2 bg-[#1e293b]/50 border-r border-white/5">
-                <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mb-0.5">On Break</p>
-                <p className="text-xl font-mono text-amber-400 font-bold text-center">{breakCount}</p>
-            </div>
-            <div className="px-6 py-2 bg-[#1e293b]/50">
-                <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mb-0.5">Grid Pool</p>
-                <p className="text-xl font-mono text-white font-bold text-center">{totalCount}</p>
-            </div>
-        </div>
-
-        {/* Right: Actions & Time */}
         <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
                 <p className="text-lg font-mono font-bold text-white leading-none">
@@ -159,11 +207,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="h-8 w-px bg-white/10 mx-2"></div>
 
             <button 
-                onClick={() => setShowProvisionModal(true)}
-                className="flex items-center gap-2 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 border border-cyan-500/50 px-4 py-2 rounded-lg transition-all active:scale-95 group"
+                onClick={() => setShowLogs(!showLogs)}
+                className={`flex items-center gap-2 border px-4 py-2 rounded-lg transition-all ${showLogs ? 'bg-cyan-600 text-white border-cyan-500' : 'bg-slate-800 text-slate-400 border-white/10'}`}
             >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                <span className="text-[10px] font-black uppercase tracking-widest hidden xl:block">Provision Node</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
             </button>
             
             <button 
@@ -187,10 +234,37 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex-1 relative bg-[#020617]">
             <MapComponent devices={officers} selectedId={selectedId} onSelect={setSelectedId} />
             
-            {/* GRID OVERLAY LINES (Visual Effect) */}
+            {/* GRID OVERLAY */}
             <div className="absolute inset-0 pointer-events-none opacity-[0.03]" 
                  style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
             </div>
+
+            {/* FLOATING LOGS PANEL */}
+            {showLogs && (
+                <div className="absolute top-6 right-6 w-80 max-h-[400px] flex flex-col bg-black/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl z-[500] animate-in slide-in-from-right-8">
+                     <div className="p-3 border-b border-white/10 flex justify-between items-center">
+                         <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-300">Operational Logs</h3>
+                         <button onClick={() => setSystemLogs([])} className="text-[9px] text-cyan-500 hover:text-white uppercase">Clear</button>
+                     </div>
+                     <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                         {systemLogs.length === 0 && <p className="text-[9px] text-slate-600 text-center py-4">No events logged</p>}
+                         {systemLogs.map(log => (
+                             <div key={log.id} className="flex gap-2 p-2 hover:bg-white/5 rounded transition-colors">
+                                 <span className="text-[9px] font-mono text-slate-500">{log.time}</span>
+                                 <div className="flex-1">
+                                     <span className={`text-[8px] font-bold px-1 rounded mr-2 ${
+                                         log.type === 'ALERT' ? 'bg-red-500 text-white' :
+                                         log.type === 'CONNECT' ? 'bg-emerald-500 text-white' :
+                                         log.type === 'GPS' ? 'bg-blue-500 text-white' :
+                                         'bg-slate-700 text-slate-300'
+                                     }`}>{log.type}</span>
+                                     <span className="text-[10px] text-slate-300">{log.msg}</span>
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                </div>
+            )}
 
             {/* BOTTOM FLOATING CONTROL BAR (Only when Node Selected) */}
             {selectedOfficer && (
@@ -211,10 +285,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                         {/* Telemetry Bits */}
                         <div className="flex-1 flex flex-col justify-center px-6 gap-1">
-                            <div className="flex justify-between text-[9px] font-mono text-slate-400 uppercase">
-                                <span>Latency</span>
-                                <span className="text-emerald-400">24ms</span>
-                            </div>
                              <div className="flex justify-between text-[9px] font-mono text-slate-400 uppercase">
                                 <span>Signal</span>
                                 <span className="text-emerald-400">{selectedOfficer.signalStrength}dB</span>
@@ -223,21 +293,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <span>Battery</span>
                                 <span className={selectedOfficer.battery < 20 ? 'text-red-500' : 'text-cyan-400'}>{selectedOfficer.battery}%</span>
                             </div>
+                            <div className="flex justify-between text-[9px] font-mono text-slate-400 uppercase">
+                                <span>Coordinates</span>
+                                <span className="text-slate-200">{Number(selectedOfficer.lat).toFixed(4)}, {Number(selectedOfficer.lng).toFixed(4)}</span>
+                            </div>
                         </div>
 
                         {/* Actions */}
                         <div className="flex items-center gap-2 p-2">
-                             <button onClick={() => alert("Warning sent")} className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 px-4 py-2 rounded-lg flex items-center gap-2 transition-all">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                <span className="text-[9px] font-black uppercase tracking-widest hidden sm:block">Warn</span>
-                             </button>
-                             <button className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-4 py-2 rounded-lg flex items-center gap-2 transition-all">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                <span className="text-[9px] font-black uppercase tracking-widest hidden sm:block">Traffic</span>
-                             </button>
-                             <button className="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 px-4 py-2 rounded-lg flex flex-col items-center justify-center transition-all h-full min-w-[60px]">
-                                <span className="text-[8px] font-black uppercase tracking-widest">Stop</span>
-                                <span className="text-[8px] font-black uppercase tracking-widest">Link</span>
+                             <button onClick={() => addLog('ALERT', `Ping sent to ${selectedOfficer.id}`)} className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 px-4 py-2 rounded-lg flex items-center gap-2 transition-all">
+                                <span className="text-[9px] font-black uppercase tracking-widest hidden sm:block">Ping</span>
                              </button>
                              <button onClick={() => onDeleteBDO(selectedOfficer.id)} className="bg-slate-700/50 hover:bg-red-600 text-white w-10 h-full rounded-lg flex items-center justify-center transition-all">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -288,6 +353,55 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
         </div>
       )}
+
+      {/* TASK DEPLOYMENT MODAL */}
+      {showTaskModal && (
+        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-[#1e293b] w-full max-w-md rounded-2xl border border-white/10 shadow-2xl p-6">
+                <h3 className="text-lg font-black text-white uppercase tracking-wider mb-6 flex items-center gap-2">
+                    <span className="w-2 h-6 bg-emerald-500 rounded-sm"></span>
+                    Deploy Directive
+                </h3>
+                
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Target Node</label>
+                        <div className="relative">
+                            <select 
+                                value={taskTarget} 
+                                onChange={(e) => setTaskTarget(e.target.value)}
+                                className="w-full bg-[#0f172a] border border-white/10 p-3 rounded-xl text-sm font-mono text-white outline-none appearance-none focus:border-emerald-500/50"
+                            >
+                                <option value="">Select Field Agent...</option>
+                                {officers.map(off => (
+                                    <option key={off.id} value={off.id}>{off.name} ({off.id}) - {off.status}</option>
+                                ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+                                <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Mission Objective</label>
+                         <textarea 
+                            value={taskTitle}
+                            onChange={(e) => setTaskTitle(e.target.value)}
+                            placeholder="Enter detailed instructions for the field agent..."
+                            className="w-full h-32 bg-[#0f172a] border border-white/10 p-3 rounded-xl text-sm font-medium text-white placeholder:text-slate-600 focus:border-emerald-500/50 outline-none resize-none"
+                         />
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3 pt-4">
+                        <button onClick={() => setShowTaskModal(false)} className="py-3 rounded-xl border border-white/10 text-slate-400 text-xs font-black uppercase tracking-widest hover:bg-white/5">Abort</button>
+                        <button onClick={handleDeployTask} className="py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-widest shadow-lg shadow-emerald-900/20">Transmit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
     </div>
   );
 };

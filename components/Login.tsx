@@ -8,20 +8,18 @@ interface LoginProps {
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [role, setRole] = useState<UserRole>('BDO');
-  const [id, setId] = useState('n1');
-  const [password, setPassword] = useState('12345');
+  const [id, setId] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Auto-fill credentials when switching tabs
+  // Auto-fill credentials for demo convenience, but NOT mock data
   useEffect(() => {
     setError('');
-    if (role === 'BDO') {
-      setId('n1');
-      setPassword('12345');
-    } else {
+    if (role === 'Admin') {
       setId('admin');
-      setPassword('admin12');
+    } else {
+        setId('');
     }
   }, [role]);
 
@@ -36,9 +34,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         const { token, user } = response;
 
         // Validation: Ensure role matches selected tab
-        if (user.role !== role && !(role === 'BDO' && user.role !== 'Admin')) {
-             // Allow 'Senior BDO', 'Account Executive' etc to pass as 'BDO' logic
-             // But strict 'Admin' must be 'Admin'
+        if (role === 'Admin' && user.role !== 'Admin') {
+            throw new Error("Access Denied: You do not have Admin privileges.");
         }
 
         // Store Session
@@ -55,45 +52,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
     } catch (err: any) {
         console.error("Login Failed", err);
-        const errorMsg = err.message || "Invalid ID or Connection Failed";
-        
-        if (errorMsg.includes('Invalid Credentials') && id === 'admin') {
-           setError("Login Failed: Please check Neon DB or use Fallback.");
-        } else {
-           setError(errorMsg);
-        }
-        
-        // --- OFFLINE / FALLBACK MODE FOR DEMO ---
-        // If backend fails (e.g. not running locally), verify against cached officers
-        if (role === 'BDO') {
-            try {
-              let officers = await persistenceService.fetchOfficersAPI();
-              
-              // NEW: If DB is empty, use Mock User for 'n1' so we don't get stuck
-              if (officers.length === 0 && id === 'n1' && password === '12345') {
-                 console.warn("Using Hardcoded Fallback for n1");
-                 const mockUser = {
-                    id: 'n1',
-                    name: 'James Wilson',
-                    password: '12345',
-                    role: 'Senior BDO',
-                 };
-                 onLogin(mockUser.name, 'BDO', mockUser.id);
-                 setLoading(false);
-                 return;
-              }
-
-              const officer = officers.find(o => o.id.toLowerCase() === id.toLowerCase() && o.password === password);
-              if (officer) {
-                  console.warn("Using Offline Auth Fallback");
-                  onLogin(officer.name, 'BDO', officer.id);
-                  setLoading(false);
-                  return;
-              }
-            } catch (fallbackErr) {
-               console.error("Fallback failed", fallbackErr);
-            }
-        }
+        const errorMsg = err.message || "Connection Failed";
+        setError(errorMsg);
     } finally {
         setLoading(false);
     }
@@ -133,7 +93,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2 ml-1">
-              {role === 'BDO' ? 'Agent Code' : 'Admin ID'}
+              {role === 'BDO' ? 'Agent ID' : 'Admin ID'}
             </label>
             <div className="relative">
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
@@ -143,7 +103,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 type="text" 
                 value={id}
                 onChange={(e) => setId(e.target.value)}
-                placeholder={role === 'BDO' ? "e.g. n1" : "e.g. admin"}
+                placeholder={role === 'BDO' ? "Enter your Agent ID" : "admin"}
                 className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl pl-12 pr-4 py-4 text-sm font-bold text-[#003366] focus:border-[#FFD100] outline-none transition-all placeholder:text-slate-300"
                 />
             </div>
@@ -179,18 +139,18 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             {loading ? (
                 <span className="flex items-center justify-center gap-2">
                     <span className="w-4 h-4 border-2 border-[#003366] border-t-transparent rounded-full animate-spin"></span>
-                    Authenticating...
+                    Verifying Credentials...
                 </span>
-            ) : 'Access Portal'}
+            ) : 'Secure Login'}
           </button>
         </form>
 
         <div className="mt-8 text-center">
           <p className="text-[8px] text-slate-400 font-bold uppercase tracking-[0.3em] mb-1">
-             System Status: Online
+             FleetGuard IoT V3.0
           </p>
           <p className="text-[8px] text-slate-300 font-bold uppercase tracking-[0.1em]">
-             v2.4.0 • Secured by FleetGuard
+             Powered by NeonDB & Render
           </p>
         </div>
       </div>
