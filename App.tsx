@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { SalesOfficer, User, UserRole, Geofence, Message, SystemStats, SalesLead, DeploymentTask } from './types';
 import Login from './components/Login';
@@ -44,11 +43,16 @@ const App: React.FC = () => {
   // 1. Initial Load: Fetch from DB
   useEffect(() => {
     const loadOfficers = async () => {
-        const data = await persistenceService.fetchOfficersAPI();
-        if (data && data.length > 0) {
-            setOfficers(data);
-        } else {
-            // If DB is empty, use mock for demo
+        try {
+            const data = await persistenceService.fetchOfficersAPI();
+            if (data && data.length > 0) {
+                setOfficers(data);
+            } else {
+                // If DB is empty, use mock for demo
+                setOfficers([INITIAL_OFFICER_TEMPLATE]);
+            }
+        } catch (e) {
+            console.error("Failed to load officers", e);
             setOfficers([INITIAL_OFFICER_TEMPLATE]);
         }
     };
@@ -228,7 +232,8 @@ const App: React.FC = () => {
   const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || officers[0];
 
   // Prevent rendering BDOView if data isn't ready
-  if (user.role === 'BDO' && !currentOfficer) {
+  // CRITICAL FIX: Ensure ALL non-admin roles trigger this guard, not just 'BDO' strict equality
+  if (user.role !== 'Admin' && !currentOfficer) {
       return (
         <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
            <div className="w-10 h-10 border-4 border-[#003366] border-t-transparent rounded-full animate-spin"></div>

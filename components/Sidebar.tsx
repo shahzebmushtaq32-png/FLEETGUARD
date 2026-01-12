@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { SalesOfficer } from '../types';
 
@@ -18,7 +17,9 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
       
       <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50">
         <div className="p-3">
-          {devices.map(off => (
+          {devices.map(off => {
+            if (!off) return null; // Safety Guard
+            return (
             <button
               key={off.id}
               onClick={() => onSelect(off.id)}
@@ -67,7 +68,8 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                 </span>
               </div>
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 

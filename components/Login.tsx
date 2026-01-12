@@ -21,7 +21,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       setPassword('12345');
     } else {
       setId('admin');
-      setPassword('admin');
+      setPassword('admin12');
     }
   }, [role]);
 
@@ -154,7 +154,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
         <div className="mt-10 text-center">
           <p className="text-[8px] text-slate-300 font-bold uppercase tracking-[0.3em]">
-             Default: {role === 'BDO' ? 'n1 / 12345' : 'admin / admin'}
+             Default: {role === 'BDO' ? 'n1 / 12345' : 'admin / admin12'}
           </p>
         </div>
       </div>
