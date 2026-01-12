@@ -55,7 +55,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
     } catch (err: any) {
         console.error("Login Failed", err);
-        setError(err.message || "Invalid ID or Connection Failed");
+        const errorMsg = err.message || "Invalid ID or Connection Failed";
+        
+        if (errorMsg.includes('Invalid Credentials') && id === 'admin') {
+           setError("Login Failed: Please check Neon DB or use Fallback.");
+        } else {
+           setError(errorMsg);
+        }
         
         // --- OFFLINE / FALLBACK MODE FOR DEMO ---
         // If backend fails (e.g. not running locally), verify against cached officers
@@ -142,7 +148,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             />
           </div>
 
-          {error && <p className="text-red-500 text-[9px] font-black text-center uppercase tracking-wide">{error}</p>}
+          {error && <p className="text-red-500 text-[9px] font-black text-center uppercase tracking-wide px-4 py-2 bg-red-50 rounded-xl">{error}</p>}
 
           <button 
             disabled={loading}

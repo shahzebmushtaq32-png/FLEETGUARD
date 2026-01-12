@@ -4,22 +4,22 @@ services:
   - type: web
     name: FLEETGUARD
     env: node
-    plan: standard
+    plan: free
     region: oregon
     buildCommand: npm install
     startCommand: node server.js
     envVars:
       - key: NEON_DATABASE_URL
-        value: postgresql://neondb_owner:npg_bzq8XLNUV6YG@ep-tiny-king-ahricq41-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+        sync: false
       - key: WS_API_KEY
         value: BDO_SECURE_NODE_99122
       - key: JWT_SECRET
-        value: 8c22a07b5ae723637fb9b41cdc81a47521c02e0fcdb1bcdfb8ee81e90a13d2eabf0765efe0c5b0ec65bd4b25feaf1fa3377fbfe72c8006dbae4974a52d34b4cc
+        sync: false
       - key: R2_ACCOUNT_ID
-        value: 225bfea5d72cd356fb8697c55d29254c
+        sync: false
       - key: R2_BUCKET_NAME
         value: bdo-fleet-assets
       - key: R2_ACCESS_KEY_ID
-        value: b8a044d9823caf1e27850bcc6806f057
+        sync: false
       - key: R2_SECRET_ACCESS_KEY
-        value: fd3e97181324351cec47f3fc27274aa3da02d320714a4745fbc608906887dd48
+        sync: false
