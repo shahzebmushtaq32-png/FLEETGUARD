@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, SalesOfficer, Incident, Message, DeploymentTask, EvidenceAsset, SalesLead } from '../types';
-import { verifyBdoIdentity } from '../services/geminiService';
 import { socketService } from '../services/socketService';
 import { persistenceService } from '../services/persistenceService';
 import { r2Service } from '../services/r2Service';
-import GeminiLiveVoice from './GeminiLiveVoice';
 
 interface BDOViewProps {
   user: User;
@@ -104,22 +102,17 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       const imageData = canvasRef.current.toDataURL('image/jpeg', 0.6);
       
       try {
-          // 1. Verify with Gemini
-          const verification = await verifyBdoIdentity(imageData);
+          // Manual Verification (No AI)
+          setCapturedPhoto(imageData);
+          setIsVerified(true);
+          setNotification({ title: 'Photo Captured', msg: `Identity Documented` });
           
-          if (verification.verified) {
-              setCapturedPhoto(imageData);
-              setIsVerified(true);
-              setNotification({ title: 'Identity Verified', msg: `Confidence: ${verification.confidence}%` });
-              
-              // 2. Upload to Cloudflare R2 in background
-              const url = await r2Service.uploadEvidence(imageData, `auth_${officer.id}_${Date.now()}.jpg`);
-              
-              // 3. Update Profile
-              socketService.sendTelemetry({ ...officer, avatar: url });
-          } else {
-              setNotification({ title: 'Verification Failed', msg: 'Please try again.' });
-          }
+          // Upload to Cloudflare R2
+          const url = await r2Service.uploadEvidence(imageData, `auth_${officer.id}_${Date.now()}.jpg`);
+          
+          // Update Profile
+          socketService.sendTelemetry({ ...officer, avatar: url });
+
       } catch (e) {
           console.error("Verification error", e);
           setNotification({ title: 'Error', msg: 'Service unavailable' });
@@ -143,7 +136,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     <div className="h-full flex flex-col bg-slate-50 font-sans">
        {/* HEADER */}
        <div className="bg-[#003366] text-white p-6 pt-10 rounded-b-[2.5rem] shadow-xl relative z-10">
-          {/* Tagline Decoration */}
           <div className="absolute top-4 right-6 text-[8px] text-[#FFD100] font-black uppercase tracking-[0.2em] opacity-80">We Find Ways</div>
           
           <div className="flex justify-between items-start mb-6 mt-2">
@@ -228,19 +220,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                        </div>
                    </div>
 
-                   {/* AI ASSISTANT */}
-                   <div className="bg-gradient-to-br from-[#003366] to-[#004A8C] p-6 rounded-[2rem] text-white shadow-xl shadow-blue-900/20 relative overflow-hidden group">
-                       <div className="relative z-10">
-                           <div className="flex items-center justify-between mb-2">
-                               <h3 className="text-sm font-black uppercase italic tracking-widest text-[#FFD100]">Fleet Command AI</h3>
-                               <div className="bg-white/10 px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider">Beta v2.0</div>
-                           </div>
-                           <p className="text-[10px] text-blue-100 mb-4 font-medium max-w-[80%]">Tap to transmit voice commands to Dispatch. tactical analysis available.</p>
-                           <GeminiLiveVoice devices={[officer]} onSetGeofence={() => {}} />
-                       </div>
-                       <div className="absolute -right-4 -bottom-4 w-32 h-32 bg-[#FFD100] rounded-full blur-[60px] opacity-20 group-hover:opacity-30 transition-opacity"></div>
-                   </div>
-
                    {/* RECENT LEADS */}
                    <div>
                        <div className="flex justify-between items-end mb-4 px-2">
@@ -303,16 +282,13 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                              <canvas ref={canvasRef} className="hidden" />
                              
-                             {/* KYC OVERLAY */}
+                             {/* OVERLAY */}
                              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none p-8">
                                  <div className="w-full h-full border-2 border-white/50 rounded-[2rem] relative">
                                     <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-[#FFD100] rounded-tl-xl"></div>
                                     <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-[#FFD100] rounded-tr-xl"></div>
                                     <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-[#FFD100] rounded-bl-xl"></div>
                                     <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-[#FFD100] rounded-br-xl"></div>
-                                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-1 rounded-full backdrop-blur-md">
-                                        <p className="text-[8px] text-white font-black uppercase tracking-widest">Face ID Check</p>
-                                    </div>
                                  </div>
                              </div>
 
@@ -333,15 +309,14 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                                    <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center shadow-xl shadow-green-900/30 mb-6 animate-bounce">
                                        <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" /></svg>
                                    </div>
-                                   <p className="text-white font-black uppercase tracking-[0.3em] text-xl shadow-black drop-shadow-md">Verified</p>
-                                   <p className="text-white/80 text-[10px] font-bold uppercase tracking-widest mt-2">BDO Secure ID: {officer.id}</p>
+                                   <p className="text-white font-black uppercase tracking-[0.3em] text-xl shadow-black drop-shadow-md">Captured</p>
                                    <button onClick={() => setIsVerified(false)} className="mt-8 bg-white/20 px-8 py-3 rounded-full text-[10px] font-black text-white uppercase hover:bg-white/30 transition-all border border-white/30">Retake Photo</button>
                                </div>
                            </div>
                        )}
                    </div>
                    <p className="text-center text-[10px] text-slate-400 uppercase tracking-widest font-bold">
-                       {isVerified ? 'Identity Confirmed' : 'Position face within the frame'}
+                       {isVerified ? 'Photo Ready for Upload' : 'Position face within the frame'}
                    </p>
                </div>
            )}
@@ -351,7 +326,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
        <div className="bg-white px-6 pb-8 pt-4 border-t border-slate-100 flex justify-between rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] relative z-20">
            <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon="home" label="HQ" />
            <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs')} icon="briefcase" label="Jobs" />
-           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie')} icon="camera" label="Verify" />
+           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie')} icon="camera" label="Capture" />
        </div>
     </div>
   );

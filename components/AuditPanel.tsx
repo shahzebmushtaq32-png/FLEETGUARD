@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { EvidenceAsset } from '../types';
 
@@ -38,13 +37,6 @@ const AuditPanel: React.FC<AuditPanelProps> = ({ evidence }) => {
              <svg className="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
              <span className="absolute bottom-2 left-3 text-[8px] text-white font-black uppercase tracking-widest">{asset.type} Asset</span>
           </div>
-
-          {asset.aiNotes && (
-            <div className="bg-slate-900 text-green-400 p-3 rounded-xl font-mono text-[9px] leading-tight mb-2">
-              <span className="text-[#FFD100] block mb-1 uppercase font-black tracking-widest opacity-50">AI Audit Insight</span>
-              {asset.aiNotes}
-            </div>
-          )}
 
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase tracking-widest">
             <span>Lat: {asset.location.lat.toFixed(4)}</span>

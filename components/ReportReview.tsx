@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { InteractionReport, SalesOfficer, SalesLead } from '../types';
 
@@ -43,15 +42,10 @@ const ReportReview: React.FC<ReportReviewProps> = ({ reports, officers, leads, o
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-100 mb-4">
-               <p className="text-[9px] font-black text-slate-400 uppercase mb-2 tracking-widest">AI Synthesis Brief</p>
+               <p className="text-[9px] font-black text-slate-400 uppercase mb-2 tracking-widest">Report Details</p>
                <div className="text-[10px] text-slate-700 leading-relaxed font-medium">
-                  {report.expandedContent.substring(0, 300)}...
+                  {report.rawNotes}
                </div>
-            </div>
-
-            <div className="bg-blue-900/5 p-3 rounded-xl border border-blue-900/10 mb-5">
-               <p className="text-[8px] font-black text-blue-900/50 uppercase mb-1">Sentiment Scan</p>
-               <p className="text-[9px] italic text-blue-900/80">"{report.sentiment}"</p>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

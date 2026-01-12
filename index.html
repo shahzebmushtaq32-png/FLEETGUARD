@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#003366">
+  <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>BDO Fleet Guard</title>
@@ -12,12 +12,12 @@
   <style>
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; touch-action: manipulation; }
     #map { height: 100%; width: 100%; }
-    .leaflet-container { font-family: inherit; }
+    .leaflet-container { font-family: inherit; background: #0f172a; }
     
     /* Mobile Scrollbar Polish */
     .custom-scrollbar::-webkit-scrollbar { width: 4px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
   </style>
 <script type="importmap">
 {
@@ -25,7 +25,6 @@
     "react": "https://esm.sh/react@^19.2.3",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
     "express": "https://esm.sh/express@^5.2.1",
     "http": "https://esm.sh/http@^0.0.1-security",
     "ws": "https://esm.sh/ws@^8.19.0",
@@ -40,7 +39,7 @@
 }
 </script>
 </head>
-<body class="bg-gray-50 text-gray-900 overflow-hidden">
+<body class="bg-[#0f172a] text-gray-100 overflow-hidden">
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>

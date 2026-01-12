@@ -1,9 +1,8 @@
 {
   "name": "BDO Fleet Guard - Realtime IoT Tracking",
-  "description": "A high-performance real-time IoT tracking dashboard designed for BDO Mobile services, featuring live mapping, device health monitoring, and AI-powered fleet analysis using Gemini.",
+  "description": "A high-performance real-time IoT tracking dashboard designed for BDO Mobile services, featuring live mapping and device health monitoring.",
   "requestFramePermissions": [
     "geolocation",
-    "microphone",
     "camera"
   ]
 }

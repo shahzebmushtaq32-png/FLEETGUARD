@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SalesOfficer } from '../types';
 
 interface SidebarProps {
@@ -8,78 +8,104 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filtered = devices.filter(d => 
+    d.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    d.id.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-6 border-b border-slate-100 bg-[#003366] text-white">
-        <h2 className="text-lg font-black tracking-tight mb-1 uppercase italic">IoT Node Cluster</h2>
-        <p className="text-[10px] text-[#FFD100] uppercase font-bold tracking-widest italic">Broadcast v4 Live</p>
+    <div className="flex flex-col h-full bg-[#0f172a]">
+      {/* Search Area */}
+      <div className="p-4 border-b border-white/5">
+        <div className="relative">
+            <input 
+                type="text" 
+                placeholder="Search Field Nodes..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-[#1e293b] border border-white/10 rounded-xl py-3 pl-10 pr-4 text-xs font-bold text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 transition-all uppercase tracking-wide"
+            />
+            <svg className="w-4 h-4 text-slate-600 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        </div>
+      </div>
+
+      {/* Header */}
+      <div className="flex justify-between items-center px-6 py-4">
+         <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Grid Personnel</h3>
+         <span className="text-[9px] font-mono bg-cyan-500/10 text-cyan-400 px-2 py-0.5 rounded border border-cyan-500/20">{filtered.length} NODES</span>
       </div>
       
-      <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50">
-        <div className="p-3">
-          {devices.map(off => {
-            if (!off) return null; // Safety Guard
-            const isSelected = selectedId === off.id;
-            
-            return (
-            <button
-              key={off.id}
-              onClick={() => onSelect(off.id)}
-              className={`w-full text-left p-4 rounded-3xl mb-2 transition-all group relative overflow-hidden ${
-                isSelected
-                  ? 'bg-white shadow-xl border-l-4 border-[#FFD100]' 
-                  : 'hover:bg-slate-100 border border-transparent'
-              }`}
-            >
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex gap-2 items-center">
-                    <span className={`text-[8px] px-2 py-0.5 rounded-lg font-black uppercase tracking-tighter ${
-                    off.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'
-                    }`}>
-                    {off.status}
-                    </span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-[#FFD100] animate-pulse' : 'bg-blue-500'}`}></div>
-                </div>
-              </div>
+      {/* List */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-4 space-y-2">
+          {filtered.map(off => {
+             const isSelected = selectedId === off.id;
+             const statusColor = off.status === 'Active' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 
+                                 off.status === 'Break' ? 'text-amber-400 bg-amber-400/10 border-amber-400/20' : 
+                                 'text-slate-400 bg-slate-400/10 border-slate-400/20';
 
-              <div className="flex items-center gap-4 mb-3">
-                {off.avatar ? (
-                  <img src={off.avatar} className={`w-10 h-10 rounded-xl object-cover shadow-md transition-all ${isSelected ? 'border-2 border-[#FFD100]' : 'grayscale'}`} alt="avatar" />
-                ) : (
-                  <div className="w-10 h-10 bg-slate-200 rounded-xl flex items-center justify-center">
-                    <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                  </div>
-                )}
-                <h3 className={`font-black text-sm uppercase tracking-tight ${isSelected ? 'text-[#003366]' : 'text-slate-600'}`}>
-                  {off.name}
-                </h3>
-              </div>
-              
-              <div className="mt-3 flex items-center justify-between">
-                 <div className="flex items-center gap-1.5">
-                    <div className="w-4 h-2 rounded-sm border border-slate-300 relative bg-slate-100">
-                        <div className={`h-full ${off.battery < 20 ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${off.battery}%` }}></div>
+             return (
+                 <button 
+                    key={off.id}
+                    onClick={() => onSelect(off.id)}
+                    className={`w-full group relative overflow-hidden rounded-xl border transition-all duration-200 text-left p-3 ${
+                        isSelected 
+                        ? 'bg-[#1e293b] border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.1)]' 
+                        : 'bg-[#1e293b]/50 border-white/5 hover:bg-[#1e293b] hover:border-white/10'
+                    }`}
+                 >
+                    {isSelected && <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-500"></div>}
+                    
+                    <div className="flex items-center gap-3 mb-3">
+                        {/* Avatar */}
+                        <div className="relative">
+                             <img src={off.avatar || 'https://via.placeholder.com/40'} className={`w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition-all ${isSelected ? 'grayscale-0' : ''}`} />
+                             <div className={`absolute -bottom-1 -right-1 w-2.5 h-2.5 rounded-full border border-[#1e293b] ${off.status === 'Offline' ? 'bg-slate-600' : 'bg-emerald-500'}`}></div>
+                        </div>
+
+                        {/* Name & ID */}
+                        <div className="flex-1 min-w-0">
+                            <h4 className="text-xs font-black text-white uppercase tracking-tight truncate">{off.name}</h4>
+                            <div className="flex items-center gap-2 mt-0.5">
+                                <svg className="w-3 h-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                <span className="text-[9px] font-mono text-slate-500 uppercase">{off.id}</span>
+                            </div>
+                        </div>
+
+                        {/* Status Badge */}
+                        <span className={`text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${statusColor}`}>
+                            {off.status === 'On Duty' ? 'DUTY' : off.status}
+                        </span>
                     </div>
-                    <span className="text-[9px] font-black text-slate-500">{off.battery}%</span>
-                 </div>
-                 <span className="text-[9px] text-slate-400 font-mono font-bold">
-                  {off.lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            </button>
-            );
-          })}
-        </div>
-      </div>
 
-      <div className="p-6 bg-white border-t border-slate-100">
-        <div className="text-[9px] uppercase tracking-widest text-slate-400 font-black mb-1">Telemetry Status</div>
-        <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-          <span className="text-[9px] font-black text-emerald-600 uppercase">Live Socket Stream</span>
-        </div>
+                    {/* Footer Metrics */}
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                        <div className="flex items-center gap-3">
+                             {/* Signal */}
+                             <div className="flex items-center gap-1">
+                                <div className="flex gap-0.5 items-end h-2">
+                                    <div className="w-0.5 bg-cyan-500 h-1"></div>
+                                    <div className="w-0.5 bg-cyan-500 h-1.5"></div>
+                                    <div className="w-0.5 bg-cyan-500 h-2"></div>
+                                    <div className="w-0.5 bg-slate-600 h-2"></div>
+                                </div>
+                                <span className="text-[8px] font-mono text-cyan-400">4G</span>
+                             </div>
+
+                             {/* Battery */}
+                             <span className={`text-[8px] font-mono font-bold ${off.battery < 20 ? 'text-red-500' : 'text-slate-400'}`}>
+                                {off.battery}%
+                             </span>
+                        </div>
+                        <span className="text-[8px] font-mono text-slate-600">
+                             {/* Mock time diff */}
+                             1H+
+                        </span>
+                    </div>
+                 </button>
+             );
+          })}
       </div>
     </div>
   );
