@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { User, SalesOfficer, Incident, Message, DeploymentTask, EvidenceAsset, SalesLead } from '../types';
 import { socketService } from '../services/socketService';
@@ -26,19 +27,21 @@ type NavigatorWithBattery = Navigator & {
     getBattery?: () => Promise<BatteryManager>;
 };
 
-export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, isOnline = true }) => {
+export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportIncident, wsStatus, isOnline = true }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'leads' | 'jobs' | 'selfie'>('home');
   const [currentStatus, setCurrentStatus] = useState(officer?.status || 'Offline');
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isVerified, setIsVerified] = useState(!!officer?.avatar);
   const [notification, setNotification] = useState<{title: string, msg: string} | null>(null);
-  const [gpsStatus, setGpsStatus] = useState<'Searching' | 'Locked' | 'Denied'>('Searching');
   
+  // Shift Timer State (8 Hours in seconds)
+  const [shiftTimeRemaining, setShiftTimeRemaining] = useState(8 * 60 * 60);
+
   // PROTOCOL DELTA: Security State
   const [isSecurityLocked, setIsSecurityLocked] = useState(false);
   const securityTimerRef = useRef<any>(null);
-  const [securityCountdown, setSecurityCountdown] = useState(120); // 2 minutes
+  const [securityCountdown, setSecurityCountdown] = useState(120); 
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,19 +55,32 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     }
   }, [officer]);
 
+  // --- SHIFT TIMER ---
+  useEffect(() => {
+    const timer = setInterval(() => {
+        setShiftTimeRemaining(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  };
+
   // --- PROTOCOL DELTA: ONE-TIME SECURITY TIMER ---
   useEffect(() => {
-    // Check if Protocol Delta has already been passed in this session
     const hasPassedProtocol = sessionStorage.getItem('bdo_protocol_delta_passed');
     
     if (!hasPassedProtocol) {
         securityTimerRef.current = setInterval(() => {
             setSecurityCountdown(prev => {
                 if (prev <= 1) {
-                    // TRIGGER LOCK
-                    clearInterval(securityTimerRef.current); // Stop timer immediately
+                    clearInterval(securityTimerRef.current);
                     setIsSecurityLocked(true);
-                    startCamera(); // Immediately warm up camera
+                    startCamera(); 
                     return 0;
                 }
                 return prev - 1;
@@ -84,14 +100,12 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     let watchId: number;
     let batteryLevel = officer.battery || 100;
 
-    // 1. Setup Battery Listener
     const initBattery = async () => {
         const nav = navigator as NavigatorWithBattery;
         if (nav.getBattery) {
             try {
                 const battery = await nav.getBattery();
                 batteryLevel = Math.round(battery.level * 100);
-                
                 battery.addEventListener('levelchange', () => {
                     batteryLevel = Math.round(battery.level * 100);
                 });
@@ -102,15 +116,8 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     };
     initBattery();
 
-    // 2. Setup High-Precision GPS
     const success = (pos: GeolocationPosition) => {
-        // MODERN SYNC TECHNIQUE: Filter noise
-        if (pos.coords.accuracy > 100) {
-            setGpsStatus('Searching'); // Signal is too weak to be trusted
-            return;
-        }
-
-        setGpsStatus('Locked');
+        if (pos.coords.accuracy > 100) return; // Ignore poor signal
         
         const payload = {
             id: officer.id,
@@ -120,27 +127,17 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
             status: currentStatus,
             lastUpdate: new Date(),
             accuracy: pos.coords.accuracy,
-            telemetrySource: 'WEB' as const // Explicitly tag as Web to distinguish from Native App
+            telemetrySource: 'WEB' as const
         };
-
-        // Stream location to Admin
         socketService.sendTelemetry(payload);
     };
 
-    const error = (err: GeolocationPositionError) => {
-        console.error("GPS Error:", err);
-        setGpsStatus('Denied');
-        setNotification({ title: 'GPS Error', msg: 'Enable precise location.' });
-    };
-
     if (navigator.geolocation) {
-        watchId = navigator.geolocation.watchPosition(success, error, {
-            enableHighAccuracy: true, // Critical for "Modern" sync
+        watchId = navigator.geolocation.watchPosition(success, (e) => console.error(e), {
+            enableHighAccuracy: true,
             timeout: 20000,
             maximumAge: 5000 
         });
-    } else {
-        setGpsStatus('Denied');
     }
 
     return () => {
@@ -148,9 +145,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     };
   }, [officer?.id, currentStatus]);
 
-  // Camera Management
   useEffect(() => {
-    // Camera is needed if we are in Selfie tab OR Security Lock is active
     if ((activeTab === 'selfie' && !isVerified) || isSecurityLocked) {
       startCamera();
     } else {
@@ -183,8 +178,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const updateDuty = (status: any) => {
     setCurrentStatus(status);
     if (!officer) return;
-    const updatedOfficer = { ...officer, status, telemetrySource: 'WEB' as const };
-    socketService.sendTelemetry(updatedOfficer);
+    socketService.sendTelemetry({ ...officer, status, telemetrySource: 'WEB' as const });
   };
 
   const handleCapture = async (isSecurityCheck = false) => {
@@ -198,32 +192,21 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       const imageData = canvasRef.current.toDataURL('image/jpeg', 0.6);
       
       try {
-          // Manual Verification
           setCapturedPhoto(imageData);
           setIsVerified(true);
-          
-          const filename = isSecurityCheck 
-             ? `protocol_delta_${officer.id}_${Date.now()}.jpg`
-             : `auth_${officer.id}_${Date.now()}.jpg`;
-
-          // Upload to Cloudflare R2
+          const filename = isSecurityCheck ? `protocol_delta_${officer.id}_${Date.now()}.jpg` : `auth_${officer.id}_${Date.now()}.jpg`;
           const url = await r2Service.uploadEvidence(imageData, filename);
-          
-          // Update Profile & Notify
           socketService.sendTelemetry({ ...officer, avatar: url, telemetrySource: 'WEB' as const });
           
           if (isSecurityCheck) {
               setNotification({ title: 'Protocol Delta', msg: `Security Check Passed` });
-              // ONE TIME ONLY: Mark as passed in session storage
               sessionStorage.setItem('bdo_protocol_delta_passed', 'true');
               setIsSecurityLocked(false);
           } else {
               setNotification({ title: 'Photo Captured', msg: `Identity Documented` });
           }
-
       } catch (e) {
           console.error("Verification error", e);
-          setNotification({ title: 'Error', msg: 'Upload failed - check connection' });
       } finally {
           setIsCapturing(false);
           if (!isSecurityCheck) stopCamera(); 
@@ -231,44 +214,32 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     }
   };
 
-  if (!officer) {
-    return (
-      <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
-          <div className="w-10 h-10 border-4 border-[#003366] border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading BDO Mobile...</p>
-      </div>
-    );
-  }
-
-  const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(val);
+  const handlePanic = () => {
+      if (confirm("REPORT EMERGENCY? This will alert HQ immediately.")) {
+          onReportIncident({
+              title: "OFFICER DISTRESS SIGNAL",
+              desc: "Immediate assistance required at current coordinates.",
+              severity: 'critical',
+              time: new Date()
+          });
+          setNotification({ title: 'ALERT SENT', msg: 'HQ has been notified.' });
+      }
   };
+
+  if (!officer) return null;
 
   return (
     <div className="h-full flex flex-col bg-slate-50 font-sans relative overflow-hidden">
        
-       {/* --- PROTOCOL DELTA LOCK SCREEN --- */}
        {isSecurityLocked && (
            <div className="absolute inset-0 z-[100] bg-[#001D3D] flex flex-col items-center justify-center p-6 animate-in slide-in-from-bottom-full duration-500">
                <div className="w-full max-w-sm bg-white rounded-[2rem] p-6 shadow-2xl relative overflow-hidden border-4 border-[#FFD100]">
                     <div className="absolute top-0 left-0 right-0 h-2 bg-red-600"></div>
-                    <div className="text-center mb-6">
-                        <div className="w-16 h-16 bg-red-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-red-900/40 animate-pulse">
-                            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-                        </div>
-                        <h2 className="text-xl font-black text-[#003366] uppercase tracking-tight">Protocol Delta</h2>
-                        <p className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em] mt-1">Mandatory Security Check</p>
-                    </div>
-
+                    <h2 className="text-xl font-black text-[#003366] uppercase tracking-tight text-center mb-6">Protocol Delta</h2>
                     <div className="relative rounded-2xl overflow-hidden aspect-[3/4] bg-black mb-6 border-2 border-slate-200">
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                         <canvas ref={canvasRef} className="hidden" />
-                        <div className="absolute inset-0 border-4 border-white/30 m-4 rounded-xl pointer-events-none"></div>
-                        <div className="absolute bottom-4 left-0 right-0 text-center">
-                            <span className="bg-black/50 text-white px-3 py-1 rounded-full text-[9px] font-mono uppercase">Live Feed</span>
-                        </div>
                     </div>
-
                     <button 
                         onClick={() => handleCapture(true)}
                         disabled={isCapturing}
@@ -277,7 +248,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                         {isCapturing ? 'Verifying...' : 'Verify Identity'}
                     </button>
                </div>
-               <p className="mt-8 text-white/50 text-[9px] font-mono uppercase tracking-widest">System Locked • {officer.id}</p>
            </div>
        )}
 
@@ -286,26 +256,28 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
           <div className="flex justify-between items-start mb-6">
              <div className="flex gap-4 items-center">
                 <div className="w-14 h-14 bg-white rounded-2xl overflow-hidden border-2 border-white/20 shadow-lg relative">
-                    {capturedPhoto ? (
-                        <img src={capturedPhoto} className="w-full h-full object-cover" />
-                    ) : (
-                        <div className="w-full h-full flex items-center justify-center text-[#003366] text-lg font-black">{officer.name.substring(0,2)}</div>
-                    )}
+                    <img src={capturedPhoto || 'https://via.placeholder.com/60'} className="w-full h-full object-cover" />
                 </div>
                 <div>
                     <h2 className="text-lg font-black uppercase tracking-tight leading-none mb-1">{officer.name}</h2>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center">
                          <span className="text-[9px] bg-[#FFD100] text-[#003366] px-1.5 py-0.5 rounded font-black uppercase tracking-wider">{officer.role}</span>
-                         <span className="text-[9px] text-blue-200 font-mono font-bold tracking-widest">{officer.id}</span>
+                         {/* TRIAL TAG */}
+                         <span className="ml-2 text-[8px] text-amber-300 font-mono border border-amber-500/30 px-1 rounded uppercase">Trial</span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1 text-[9px] font-mono text-cyan-300">
+                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                       <span>Shift Remaining: {formatTime(shiftTimeRemaining)}</span>
                     </div>
                 </div>
              </div>
-             <button onClick={onLogout} className="bg-white/10 p-2 rounded-xl hover:bg-red-500/20 hover:text-red-300 transition-all">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+             
+             {/* Report / Panic Button */}
+             <button onClick={handlePanic} className="bg-red-500 p-2 rounded-xl shadow-lg hover:bg-red-600 animate-pulse">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
              </button>
           </div>
 
-          {/* Status Bar */}
           <div className="flex bg-[#002855] p-1.5 rounded-xl border border-white/5">
                 <button onClick={() => updateDuty('Active')} className={`flex-1 py-2.5 rounded-lg text-[9px] font-black uppercase transition-all flex items-center justify-center gap-2 ${currentStatus === 'Active' ? 'bg-[#FFD100] text-[#003366] shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}>
                     <div className={`w-1.5 h-1.5 rounded-full ${currentStatus === 'Active' ? 'bg-[#003366]' : 'bg-slate-500'}`}></div>
@@ -318,7 +290,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
           </div>
        </div>
 
-       {/* NOTIFICATION TOAST */}
        {notification && (
            <div className="mx-6 -mt-4 bg-[#FFD100] text-[#003366] p-4 rounded-xl shadow-lg relative z-20 animate-in slide-in-from-top-4 flex items-center gap-3">
                <div className="w-2 h-2 bg-[#003366] rounded-full animate-ping"></div>
@@ -329,23 +300,16 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
            </div>
        )}
 
-       {/* CONTENT AREA */}
        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 bg-slate-50">
            {activeTab === 'home' && (
                <div className="space-y-6">
                    <div className="grid grid-cols-2 gap-4">
                        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
-                           <div className="flex items-center gap-2 mb-2">
-                              <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-                              <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest">Merchant Visits</p>
-                           </div>
+                           <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-2">Visits</p>
                            <p className="text-4xl font-black text-[#003366] tracking-tighter">{officer.visitCount}</p>
                        </div>
                        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
-                           <div className="flex items-center gap-2 mb-2">
-                              <div className="w-1.5 h-1.5 rounded-full bg-[#FFD100]"></div>
-                              <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest">Quota Goal</p>
-                           </div>
+                           <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-2">Quota</p>
                            <div className="relative w-16 h-16 mx-auto mt-1">
                                <svg className="w-full h-full transform -rotate-90">
                                    <circle cx="32" cy="32" r="28" stroke="#f1f5f9" strokeWidth="6" fill="transparent" />
@@ -355,53 +319,18 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                            </div>
                        </div>
                    </div>
-
-                   {/* Next Lead Card */}
-                   <div className="bg-[#003366] rounded-[2rem] p-6 text-white shadow-lg relative overflow-hidden">
-                       <div className="absolute top-0 right-0 p-6 opacity-10">
-                           <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
-                       </div>
-                       <h3 className="text-[10px] text-[#FFD100] font-black uppercase tracking-widest mb-1">Next Priority</h3>
-                       <p className="text-xl font-black mb-4 leading-tight">SM Hypermarket Makati</p>
-                       <div className="flex gap-2">
-                           <button className="flex-1 bg-white text-[#003366] py-3 rounded-xl text-[10px] font-black uppercase tracking-widest">Navigate</button>
-                           <button className="flex-1 bg-white/10 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest">Check In</button>
-                       </div>
-                   </div>
                </div>
            )}
 
            {activeTab === 'leads' && (
                <div className="space-y-4">
                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2 px-2">Assigned Leads</h3>
-                   {officer.leads && officer.leads.length > 0 ? (
-                       officer.leads.map(lead => (
-                           <div key={lead.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
-                               <div className="flex justify-between items-start">
-                                   <div>
-                                       <h4 className="text-sm font-black text-[#003366] uppercase">{lead.clientName}</h4>
-                                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{lead.id}</p>
-                                   </div>
-                                   <span className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase ${
-                                       lead.stage === 'Closing' ? 'bg-emerald-100 text-emerald-700' :
-                                       lead.stage === 'Proposal' ? 'bg-blue-100 text-blue-700' :
-                                       'bg-slate-100 text-slate-600'
-                                   }`}>{lead.stage}</span>
-                               </div>
-                               <div className="w-full h-px bg-slate-100"></div>
-                               <div className="flex justify-between items-center">
-                                   <div className="text-xs font-bold text-slate-700">
-                                       Pot. Vol: {formatCurrency(lead.value)}
-                                   </div>
-                                   <button className="text-[9px] font-black text-blue-600 uppercase tracking-wider bg-blue-50 px-3 py-1.5 rounded-lg">View Details</button>
-                               </div>
-                           </div>
-                       ))
-                   ) : (
-                       <div className="text-center py-10 text-slate-400">
-                           <p className="text-xs font-bold uppercase">No leads assigned</p>
+                   {officer.leads.map(lead => (
+                       <div key={lead.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                           <h4 className="text-sm font-black text-[#003366] uppercase">{lead.clientName}</h4>
+                           <span className="px-2 py-1 rounded-lg text-[8px] font-black uppercase bg-slate-100 text-slate-600">{lead.stage}</span>
                        </div>
-                   )}
+                   ))}
                </div>
            )}
 
@@ -413,15 +342,11 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                             <div key={task.id} className="bg-white p-5 rounded-2xl border-l-4 border-[#FFD100] shadow-sm">
                                 <h4 className="text-xs font-black text-[#003366] uppercase mb-1">{task.title}</h4>
                                 <p className="text-[10px] text-slate-500 mb-3">{task.description}</p>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-[9px] font-mono text-slate-400">{new Date(task.createdAt).toLocaleTimeString()}</span>
-                                    <span className="text-[9px] font-black text-amber-500 uppercase bg-amber-50 px-2 py-1 rounded">{task.status}</span>
-                                </div>
+                                <span className="text-[9px] font-black text-amber-500 uppercase bg-amber-50 px-2 py-1 rounded">{task.status}</span>
                             </div>
                         ))
                     ) : (
                         <div className="flex flex-col items-center justify-center py-20 text-slate-300">
-                             <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
                              <p className="text-[10px] font-black uppercase tracking-widest">No active tasks</p>
                         </div>
                     )}
@@ -435,22 +360,8 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                            <>
                              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                              <canvas ref={canvasRef} className="hidden" />
-                             
-                             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none p-8">
-                                 <div className="w-full h-full border-2 border-white/50 rounded-[2rem] relative">
-                                    <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-[#FFD100] rounded-tl-xl"></div>
-                                    <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-[#FFD100] rounded-tr-xl"></div>
-                                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-[#FFD100] rounded-bl-xl"></div>
-                                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-[#FFD100] rounded-br-xl"></div>
-                                 </div>
-                             </div>
-
                              <div className="absolute bottom-8 left-0 right-0 flex justify-center">
-                                 <button 
-                                    onClick={() => handleCapture(false)}
-                                    disabled={isCapturing}
-                                    className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-white/20 active:scale-90 transition-all backdrop-blur-sm"
-                                 >
+                                 <button onClick={() => handleCapture(false)} className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-white/20 active:scale-90 transition-all backdrop-blur-sm">
                                      <div className="w-16 h-16 bg-white rounded-full shadow-lg"></div>
                                  </button>
                              </div>
@@ -459,23 +370,16 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                            <div className="w-full h-full relative">
                                <img src={capturedPhoto!} className="w-full h-full object-cover" />
                                <div className="absolute inset-0 bg-[#003366]/40 flex flex-col items-center justify-center backdrop-blur-sm">
-                                   <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center shadow-xl shadow-green-900/30 mb-6 animate-bounce">
-                                       <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" /></svg>
-                                   </div>
                                    <p className="text-white font-black uppercase tracking-[0.3em] text-xl shadow-black drop-shadow-md">Captured</p>
                                    <button onClick={() => setIsVerified(false)} className="mt-8 bg-white/20 px-8 py-3 rounded-full text-[10px] font-black text-white uppercase hover:bg-white/30 transition-all border border-white/30">Retake Photo</button>
                                </div>
                            </div>
                        )}
                    </div>
-                   <p className="text-center text-[10px] text-slate-400 uppercase tracking-widest font-bold">
-                       {isVerified ? 'Photo Ready for Upload' : 'Position face within the frame'}
-                   </p>
                </div>
            )}
        </div>
 
-       {/* BOTTOM NAV */}
        <div className="bg-white px-4 pb-8 pt-4 border-t border-slate-100 flex justify-between rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] relative z-20">
            <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon="home" label="HQ" />
            <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} icon="users" label="Leads" />

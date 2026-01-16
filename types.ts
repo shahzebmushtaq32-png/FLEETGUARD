@@ -87,7 +87,8 @@ export interface SalesOfficer {
   evidence: EvidenceAsset[];
   tasks: DeploymentTask[];
   // NEW FIELDS FOR NATIVE APP SUPPORT
-  telemetrySource?: 'WEB' | 'ANDROID_BG' | 'ANDROID_FG'; 
+  // Fix: Extended telemetrySource to include 'NEW_DB' and 'SUPER_DB' for data source tracking.
+  telemetrySource?: 'WEB' | 'ANDROID_BG' | 'ANDROID_FG' | 'NEW_DB' | 'SUPER_DB'; 
   appVersion?: string;
 }
 

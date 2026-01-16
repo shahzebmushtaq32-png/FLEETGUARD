@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { UserRole } from '../types';
 import { persistenceService } from '../services/persistenceService';
@@ -38,13 +39,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             throw new Error("Access Denied: You do not have Admin privileges.");
         }
 
-        // Store Session
+        // Store Session - UPDATED TO 8 HOURS
         localStorage.setItem('bdo_auth_token', token);
         localStorage.setItem('bdo_user_session', JSON.stringify({
             username: user.name,
             role: user.role,
             officerId: user.id,
-            expiresAt: Date.now() + (12 * 60 * 60 * 1000) // 12 hours
+            expiresAt: Date.now() + (8 * 60 * 60 * 1000) // 8 hours Shift Limit
         }));
 
         // Proceed
@@ -150,8 +151,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
              FleetGuard IoT V3.0
           </p>
           <p className="text-[8px] text-slate-300 font-bold uppercase tracking-[0.1em]">
-             Powered by NeonDB & Render
+             Network Load Balancer Active
           </p>
+          <div className="mt-3 bg-amber-500/10 border border-amber-500/20 py-1 px-3 rounded-full inline-block">
+             <p className="text-[7px] text-amber-500 font-black uppercase tracking-widest">
+                ⚠ Evaluation Mode: Free Trial Tier
+             </p>
+          </div>
         </div>
       </div>
     </div>

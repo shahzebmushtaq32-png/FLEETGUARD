@@ -18,25 +18,17 @@ const JWT_SECRET = process.env.JWT_SECRET || "8c22a07b5ae723637fb9b41cdc81a47521
 
 // --- DATABASE CONFIGURATION ---
 const getDbUrl = () => {
-  // 1. Try Environment Variable
   let url = process.env.NEON_DATABASE_URL;
-  
-  // 2. STRICT CHECK: No Fallbacks allowed. 
   if (!url) {
     console.error("❌ CRITICAL ERROR: NEON_DATABASE_URL environment variable is missing.");
-    console.error("Please add NEON_DATABASE_URL to your Render Environment Variables.");
-    process.exit(1); // Crash if no DB
+    process.exit(1); 
   }
-  
-  // 3. Clean up 'psql' command artifacts if present
   if (url && url.startsWith("psql '")) {
     url = url.replace("psql '", "").replace(/'$/, "");
   }
-
   if (url && url.includes("channel_binding=require")) {
     url = url.replace("channel_binding=require", "");
   }
-
   return url.replace(/&+/g, '&').replace(/\?&/g, '?').replace(/[?&]$/, '');
 };
 
@@ -52,11 +44,10 @@ const pool = new Pool({
 const getR2Endpoint = () => {
   if (process.env.R2_ENDPOINT) return process.env.R2_ENDPOINT.trim();
   const accountId = process.env.R2_ACCOUNT_ID;
-  if (!accountId) return undefined; // Return undefined if no R2 config
+  if (!accountId) return undefined; 
   return `https://${accountId}.r2.cloudflarestorage.com`;
 };
 
-// Initialize R2 conditionally
 let r2;
 if (process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
     r2 = new S3Client({
@@ -114,14 +105,30 @@ const requireRole = (allowedRoles) => (req, res, next) => {
     next();
 };
 
-// --- DB INIT ---
+// --- HELPER: GEOMETRY ---
+function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
+  const R = 6371e3; // meters
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function deg2rad(deg) {
+  return deg * (Math.PI / 180);
+}
+
+// --- DB INIT & CLEANUP ---
 const initDB = async (retries = 3, delay = 2000) => {
   for (let i = 0; i < retries; i++) {
     try {
       await pool.query('SELECT 1');
       console.log("✅ NeonDB Connection: Active");
       
-      // Updated Schema to support Native App Metadata
       await pool.query(`
         CREATE TABLE IF NOT EXISTS officers (
           id TEXT PRIMARY KEY,
@@ -150,6 +157,10 @@ const initDB = async (retries = 3, delay = 2000) => {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+      
+      // STORAGE OPTIMIZATION: Auto-prune data older than 7 days on boot
+      await pool.query("DELETE FROM location_history WHERE timestamp < NOW() - INTERVAL '7 days'");
+      console.log("🧹 DB Cleanup: Removed history older than 7 days to save storage.");
 
       const checkAdmin = await pool.query("SELECT * FROM officers WHERE id = 'admin'");
       if (checkAdmin.rowCount === 0) {
@@ -171,7 +182,6 @@ const initDB = async (retries = 3, delay = 2000) => {
 initDB();
 
 // --- ROUTES ---
-
 app.get('/', (req, res) => res.status(200).send('FleetGuard Realtime Server Active'));
 app.get('/health', (req, res) => res.status(200).send('FleetGuard Online'));
 
@@ -185,7 +195,6 @@ app.post('/api/login', requireApiKey, async (req, res) => {
     const user = result.rows[0];
 
     if (!user || user.password !== cleanPass) {
-      console.warn(`❌ Login Failed for ${cleanId}: Invalid Credentials`);
       return res.status(401).json({ error: 'Invalid Credentials' });
     }
 
@@ -207,14 +216,13 @@ app.get('/api/officers', authenticateToken, async (req, res) => {
     const officers = result.rows.map(o => ({
       ...o,
       lastUpdate: o.last_update,
-      telemetrySource: o.telemetry_source || 'WEB', // Map DB snake_case to JS camelCase
+      telemetrySource: o.telemetry_source || 'WEB',
       appVersion: o.app_version,
       networkType: '5G', 
       leads: [], history: [], evidence: [], tasks: []
     }));
     res.json(officers);
   } catch (err) {
-    console.error("DB Fetch Error:", err);
     res.status(500).json({ error: 'Database Fetch Error' });
   }
 });
@@ -245,8 +253,9 @@ app.delete('/api/officers/:id', authenticateToken, requireRole(['Admin']), async
 
 app.get('/api/history/:nodeId', authenticateToken, async (req, res) => {
   try {
+    // Limit to 50 points to save bandwidth
     const result = await pool.query(
-      'SELECT lat, lng, timestamp FROM location_history WHERE node_id = $1 ORDER BY timestamp DESC LIMIT 100',
+      'SELECT lat, lng, timestamp FROM location_history WHERE node_id = $1 ORDER BY timestamp DESC LIMIT 50',
       [req.params.nodeId]
     );
     res.json(result.rows.reverse());
@@ -264,19 +273,16 @@ app.post('/api/upload-proxy', authenticateToken, async (req, res) => {
   
   try {
     const buffer = Buffer.from(fileData.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-    
     await r2.send(new PutObjectCommand({
       Bucket: bucketName,
       Key: key,
       Body: buffer,
       ContentType: 'image/jpeg'
     }));
-    
     const url = await getSignedUrl(r2, new GetObjectCommand({
       Bucket: bucketName, 
       Key: key
     }), { expiresIn: 604800 }); 
-
     res.json({ publicUrl: url });
   } catch (err) {
     console.error("R2 Upload Failed:", err);
@@ -293,16 +299,24 @@ const broadcast = (msg) => {
   });
 };
 
-// WRITE BUFFER: Holds updates in memory
+// MEMORY BUFFER
 const WRITE_BUFFER = {
     updates: new Map(), // Key: OfficerID, Value: Data
     history: []         // Array of history items
 };
 
-// BATCH FLUSH: Writes to DB every 10 seconds
-setInterval(async () => {
+// Track last saved location to implement "Significant Motion" filter
+const LAST_SAVED_LOCATIONS = new Map(); // Key: OfficerID, Value: {lat, lng}
+
+/**
+ * CORE FLUSH LOGIC
+ * Saves buffered data to NeonDB.
+ */
+const flushToDB = async () => {
     if (WRITE_BUFFER.updates.size === 0 && WRITE_BUFFER.history.length === 0) return;
 
+    console.log(`[DB] Starting batch write (Updates: ${WRITE_BUFFER.updates.size}, History: ${WRITE_BUFFER.history.length})`);
+    
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -311,37 +325,57 @@ setInterval(async () => {
         if (WRITE_BUFFER.updates.size > 0) {
             const updates = Array.from(WRITE_BUFFER.updates.values());
             for (const u of updates) {
-                // Now updates telemetry_source and app_version columns too
                 await client.query(
                     `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW(), telemetry_source=$5, app_version=$6 WHERE id=$7`,
                     [u.lat, u.lng, u.battery, u.status, u.telemetrySource || 'WEB', u.appVersion || '1.0.0', u.id]
                 );
             }
-            console.log(`[DB] Flushed ${updates.length} status updates`);
             WRITE_BUFFER.updates.clear();
         }
 
         // 2. Bulk Insert History
         if (WRITE_BUFFER.history.length > 0) {
-            // Processing in chunks to be safe
-            const batch = WRITE_BUFFER.history.splice(0, 50); // Take 50 items at a time
+            const batch = WRITE_BUFFER.history.splice(0, 50); 
             for (const h of batch) {
                 await client.query(
                   'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
                   [h.id, h.lat, h.lng, h.battery, h.status]
                 );
             }
-            console.log(`[DB] Flushed ${batch.length} history records`);
         }
 
         await client.query('COMMIT');
+        console.log(`[DB] Batch write complete.`);
     } catch (e) {
         await client.query('ROLLBACK');
         console.error("[DB] Batch Write Failed:", e.message);
     } finally {
         client.release();
     }
-}, 10000); // 10 Seconds Interval
+};
+
+/**
+ * ECO-MODE SCHEDULER
+ * Flush only every 15 MINUTES (900000ms).
+ * This allows NeonDB to 'Auto-Suspend' (Scale to 0) between writes.
+ * Neon suspends after 5 mins of inactivity.
+ * 15 min interval = 5 mins active + 10 mins suspended.
+ * This effectively reduces billable hours by ~66%.
+ */
+setInterval(flushToDB, 900000); 
+
+/**
+ * GRACEFUL SHUTDOWN
+ * If Render restarts the server, flush RAM data to DB immediately so nothing is lost.
+ */
+const shutdown = async () => {
+    console.log("[System] Shutting down, flushing buffers...");
+    await flushToDB();
+    process.exit(0);
+};
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -370,16 +404,30 @@ wss.on('connection', (ws, req) => {
       if (data.type === 'TELEMETRY') {
         const { id, lat, lng, battery, status, telemetrySource, appVersion } = data.payload;
 
-        // 1. Broadcast IMMEDIATELY to Dashboards (Real-time Feel)
+        // 1. Broadcast IMMEDIATELY (Live View is always 60fps real-time)
+        // This bypasses DB, so it works even when DB is sleeping.
         broadcast([data.payload]);
 
-        // 2. Buffer for DB Write (Protect Free Tier)
-        // Only update current status map (overwrites previous update from same user in this window)
+        // 2. Buffer Latest Status (Always keep 'last known' updated)
         WRITE_BUFFER.updates.set(id, { id, lat, lng, battery, status, telemetrySource, appVersion });
         
-        // Push to history buffer (Log every point)
+        // 3. Smart History Filter (COMPUTE SAVER)
+        // Only save to history DB if moved > 30 meters
         if (lat && lng) {
-             WRITE_BUFFER.history.push({ id, lat, lng, battery, status });
+             const lastLoc = LAST_SAVED_LOCATIONS.get(id);
+             let shouldSave = false;
+
+             if (!lastLoc) {
+                 shouldSave = true;
+             } else {
+                 const dist = getDistanceFromLatLonInM(lat, lng, lastLoc.lat, lastLoc.lng);
+                 if (dist > 30) shouldSave = true; // 30 meters threshold
+             }
+
+             if (shouldSave) {
+                 WRITE_BUFFER.history.push({ id, lat, lng, battery, status });
+                 LAST_SAVED_LOCATIONS.set(id, { lat, lng });
+             }
         }
       }
     } catch (e) {

@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { SalesOfficer, User, UserRole, Geofence, Message, SystemStats, SalesLead, DeploymentTask } from './types';
+import { SalesOfficer, User, UserRole, Geofence, Message, SystemStats, SalesLead, DeploymentTask, Incident } from './types';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import { BDOView } from './components/BDOView';
@@ -35,103 +36,64 @@ const INITIAL_OFFICER_TEMPLATE: SalesOfficer = {
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [officers, setOfficers] = useState<SalesOfficer[]>([]); // Empty initial state, waiting for DB
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [officers, setOfficers] = useState<SalesOfficer[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isWithinShift, setIsWithinShift] = useState(true);
 
-  // 1. Data Fetching Strategy: Trigger on Load AND on Auth Change
+  // --- UPDATED TRIAL PROTECTION: Mon-Fri, 11:00 AM to 6:00 PM ---
   useEffect(() => {
-    if (user) {
+    const checkShift = () => {
+        const now = new Date();
+        const hour = now.getHours();
+        const day = now.getDay();
+        
+        // Monday (1) to Friday (5)
+        const isWeekday = day >= 1 && day <= 5;
+        // 11:00 AM (11) to 6:00 PM (18)
+        const inTimeWindow = hour >= 11 && hour < 18;
+        
+        setIsWithinShift(isWeekday && inTimeWindow);
+    };
+
+    checkShift();
+    const interval = setInterval(checkShift, 30000); // Check every 30 seconds for precision
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (user && isWithinShift) {
         const loadOfficers = async () => {
-            console.log("[App] Fetching latest fleet data...");
             try {
                 const data = await persistenceService.fetchOfficersAPI();
-                
-                if (Array.isArray(data) && data.length > 0) {
-                    console.log(`[App] Loaded ${data.length} officers from API`);
-                    // Merge mock leads if leads are empty (since DB usually doesn't store leads in this simple schema)
-                    const enrichedData = data.map(o => ({
-                        ...INITIAL_OFFICER_TEMPLATE, // Defaults
-                        ...o, // Overwrites from DB
-                        leads: o.leads && o.leads.length > 0 ? o.leads : MOCK_OFFICER_LEADS // Ensure leads exist for UI
-                    }));
-                    setOfficers(enrichedData);
-                } else {
-                    console.warn("[App] API returned 0 nodes. Constructing fallback identity...");
-                    handleFallbackIdentity();
+                if (Array.isArray(data)) {
+                    setOfficers(data.map(o => ({
+                        ...INITIAL_OFFICER_TEMPLATE, 
+                        ...o,
+                        lastUpdate: o.lastUpdate ? new Date(o.lastUpdate) : new Date()
+                    })));
                 }
             } catch (e) {
-                console.error("[App] Failed to load officers", e);
-                handleFallbackIdentity();
+                console.error("[App] Unified Sync Error:", e);
             }
         };
         loadOfficers();
     }
-  }, [user]); 
+  }, [user, isWithinShift]); 
 
-  // Fallback: If DB is empty or unreachable, create a local representation of "Me" so the app works
-  const handleFallbackIdentity = () => {
-      if (user && user.role !== 'Admin') {
-          const self: SalesOfficer = {
-              ...INITIAL_OFFICER_TEMPLATE,
-              id: user.assignedOfficerId || 'OFC-TEMP',
-              name: user.username,
-              role: user.role as any,
-              status: 'Active',
-              lastUpdate: new Date(),
-              avatar: undefined // Will force Initials avatar
-          };
-          setOfficers([self]);
-      }
-  };
-
-  // Native App Feature: Offline Detection & Sync
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-    };
+    const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  // Native App Feature: Session Restore (JWT)
   useEffect(() => {
-    const session = localStorage.getItem('bdo_user_session');
-    const token = localStorage.getItem('bdo_auth_token');
-    
-    if (session && token) {
-      try {
-        const parsed = JSON.parse(session);
-        if (parsed.expiresAt > Date.now()) {
-            console.log("[App] Restoring session for", parsed.username);
-            setUser({
-                id: parsed.role === 'Admin' ? 'ADM-ROOT' : parsed.officerId,
-                username: parsed.username,
-                role: parsed.role,
-                assignedOfficerId: parsed.officerId
-            });
-        } else {
-            localStorage.removeItem('bdo_user_session');
-            localStorage.removeItem('bdo_auth_token');
-        }
-      } catch (e) {
-        console.error("Session restore failed", e);
-      }
-    }
-  }, []);
-
-  // Secure Connection Logic & SYNC HANDLER
-  useEffect(() => {
-    if (user) {
+    if (user && isWithinShift) {
       const role = user.role === 'Admin' ? 'dashboard' : 'iot';
       socketService.connect(role, (status) => setWsStatus(status));
       
@@ -141,44 +103,24 @@ const App: React.FC = () => {
             updates.forEach(update => {
                 const index = newOfficers.findIndex(o => o.id === update.id);
                 if (index !== -1) {
-                    newOfficers[index] = { ...newOfficers[index], ...update, lastUpdate: new Date() };
-                } 
+                    newOfficers[index] = { 
+                        ...newOfficers[index], 
+                        ...update, 
+                        lastUpdate: new Date() 
+                    };
+                } else if (update.id && update.name) {
+                    newOfficers.push({ ...INITIAL_OFFICER_TEMPLATE, ...update as SalesOfficer });
+                }
             });
             return newOfficers;
         });
       });
-
-      // Handle Roster Updates (When new BDO is added by another admin)
-      socketService.onRosterUpdate((newOfficer) => {
-          console.log("[App] Roster Update Received:", newOfficer);
-          setOfficers(prev => {
-              if (prev.find(o => o.id === newOfficer.id)) return prev;
-              const fullOfficer: SalesOfficer = {
-                  ...INITIAL_OFFICER_TEMPLATE, // Use template defaults for missing props
-                  ...newOfficer,
-                  leads: [],
-                  history: []
-              };
-              return [...prev, fullOfficer];
-          });
-      });
     }
 
     return () => {
-      if (!user) socketService.disconnect();
+      socketService.disconnect();
     }
-  }, [user]);
-
-  // SYNC ENGINE: Flushes queue when WebSocket comes Alive
-  useEffect(() => {
-    if (wsStatus === 'Broadcasting_Live') {
-        persistenceService.processSyncQueue(async (action, payload) => {
-             if (action === 'TELEMETRY') {
-                 socketService.sendTelemetry(payload, true);
-             }
-        });
-    }
-  }, [wsStatus]);
+  }, [user, isWithinShift]);
 
   const handleLogin = (username: string, role: UserRole, officerId?: string) => {
     setUser({
@@ -192,64 +134,55 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('bdo_user_session');
-    localStorage.removeItem('bdo_auth_token');
     socketService.disconnect();
   };
 
   const handleAddBDO = async (name: string, code: string, password: string, avatar: string) => {
-    if (officers.find(o => o.id === code)) {
-      alert("Error: BDO Code already exists!");
-      return;
-    }
-
     const newBdo: SalesOfficer = {
+      ...INITIAL_OFFICER_TEMPLATE,
       id: code,
       name,
       password,
-      lat: 14.5547, lng: 121.0244,
-      battery: 100, signalStrength: 100, networkType: '5G',
-      status: 'Offline', lastUpdate: new Date(),
-      role: 'Account Executive',
-      leads: [], history: [],
-      pipelineValue: 0, visitCount: 0, quotaProgress: 0,
-      qrOnboarded: 0, qrActivated: 0, qrVolume: 0,
-      evidence: [], tasks: [],
+      status: 'Offline',
       avatar: avatar || undefined
     };
-    
-    // Optimistic Update
-    const updatedList = [...officers, newBdo];
-    setOfficers(updatedList);
-    
-    // Save to DB
+    setOfficers(prev => [...prev, newBdo]);
     await persistenceService.addOfficerAPI(newBdo);
-    
-    // Save to Cache
-    persistenceService.saveOfficers(updatedList);
   };
 
   const handleDeleteBDO = async (id: string) => {
-    const updated = officers.filter(o => o.id !== id);
-    setOfficers(updated);
-    // Delete from DB
+    setOfficers(prev => prev.filter(o => o.id !== id));
     await persistenceService.deleteOfficerAPI(id);
-    persistenceService.saveOfficers(updated);
   };
 
-  const handleAssignTask = (officerId: string, taskTitle: string) => {
-    setOfficers(prev => prev.map(off => {
-      if (off.id === officerId) {
-        const newTask: DeploymentTask = {
+  const handleAssignTask = async (officerId: string, taskTitle: string) => {
+      const newTask: DeploymentTask = {
           id: `TASK-${Date.now()}`,
           title: taskTitle,
-          description: "New Job assigned by Admin",
+          description: 'Priority directive from HQ',
           status: 'Pending',
           createdAt: new Date()
-        };
-        return { ...off, tasks: [...off.tasks, newTask] };
-      }
-      return off;
-    }));
+      };
+      
+      setOfficers(prev => prev.map(o => {
+          if (o.id === officerId) {
+              return { ...o, tasks: [newTask, ...o.tasks] };
+          }
+          return o;
+      }));
+
+      await persistenceService.assignTaskAPI(officerId, newTask);
+      
+      socketService.sendChat({
+          id: Date.now().toString(),
+          text: `New Directive: ${taskTitle}`,
+          senderId: 'ADM-ROOT',
+          senderName: 'HQ',
+          isFromAdmin: true,
+          isDirective: true,
+          timestamp: new Date(),
+          isEncrypted: false
+      });
   };
 
   const stats: SystemStats = {
@@ -264,21 +197,33 @@ const App: React.FC = () => {
     totalOnboarded: officers.reduce((acc, o) => acc + o.qrOnboarded, 0)
   };
 
-  if (!user) return <Login onLogin={handleLogin} />;
-
-  // Safely find the current officer or fallback
-  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || officers[0];
-
-  // Prevent rendering BDOView if data isn't ready
-  // GUARD: If Admin, we don't need currentOfficer. If BDO, we DO need it.
-  if (user.role !== 'Admin' && !currentOfficer) {
+  if (!isWithinShift) {
       return (
-        <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
-           <div className="w-10 h-10 border-4 border-[#003366] border-t-transparent rounded-full animate-spin"></div>
-           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Syncing Profile...</p>
-        </div>
+          <div className="h-screen w-full flex flex-col items-center justify-center bg-[#001D3D] text-white p-12 text-center">
+              <div className="w-24 h-24 bg-amber-500 rounded-3xl flex items-center justify-center mb-8 shadow-[0_0_40px_rgba(245,158,11,0.2)] border-4 border-amber-400/20">
+                  <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </div>
+              <h1 className="text-3xl font-black uppercase tracking-tighter mb-4">System on Standby</h1>
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-6 max-w-sm">
+                  <p className="text-slate-300 text-sm uppercase font-bold tracking-widest leading-relaxed mb-4">
+                      Operational Hours:<br/>
+                      <span className="text-amber-400">MON-FRI | 11:00 AM - 06:00 PM</span>
+                  </p>
+                  <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">
+                      The cluster is currently hibernating to preserve free trial credits. Weekends are inactive.
+                  </p>
+              </div>
+              <div className="mt-12 flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-slate-700"></div>
+                  <span className="text-[10px] font-mono text-slate-600 uppercase tracking-widest">Load Balancer: Idle</span>
+              </div>
+          </div>
       );
   }
+
+  if (!user) return <Login onLogin={handleLogin} />;
+
+  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || officers[0];
 
   return (
     <div className="h-screen w-full bg-slate-50 overflow-hidden">
@@ -286,21 +231,21 @@ const App: React.FC = () => {
         <AdminDashboard 
           user={user} 
           officers={officers} 
-          geofences={geofences}
+          geofences={[]}
           stats={stats}
-          messages={messages}
+          messages={[]}
           onLogout={handleLogout}
           onAddBDO={handleAddBDO}
           onDeleteBDO={handleDeleteBDO}
           onAssignTask={handleAssignTask}
-          onSendMessage={(t, d) => setMessages(p => [...p, { id: Date.now().toString(), text: t, isDirective: d, senderId: user.id, senderName: 'Admin', timestamp: new Date(), isEncrypted: false, isFromAdmin: true }])}
+          onSendMessage={() => {}}
           wsStatus={wsStatus}
         />
       ) : (
         <BDOView 
           user={user} 
           officer={currentOfficer}
-          messages={messages}
+          messages={[]}
           onLogout={handleLogout}
           onSendMessage={() => {}}
           onReportIncident={() => {}}
