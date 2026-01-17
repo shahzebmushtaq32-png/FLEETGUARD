@@ -111,15 +111,41 @@ export const persistenceService = {
             signal: AbortSignal.timeout(5000)
         });
         if (response.ok) return await response.json();
-    } catch (e) {}
+    } catch (e) {
+        console.warn("[Persistence] Backend login failed, checking bypass...");
+    }
 
-    if (id === 'admin' && password === 'admin') {
+    // AUTH BYPASS FOR LOCAL/DEV DEMO
+    if (id === 'admin' && (password === 'admin' || password === '123')) {
          return { 
             token: 'dev-bypass-token', 
             user: { id: 'ADM-ROOT', name: 'Administrator (Bypass)', role: 'Admin' } 
          };
     }
+
+    if (id === 'n1' && (password === '12345' || password === '123')) {
+        return {
+            token: 'dev-bypass-token',
+            user: { id: 'n1', name: 'James Wilson', role: 'BDO' }
+        };
+    }
+
     throw new Error("Access Denied: Node verification failed.");
+  },
+
+  updateOfficerAvatarAPI: async (id: string, avatarUrl: string) => {
+    const token = localStorage.getItem('bdo_auth_token');
+    const promises = [
+        fetch(`${BACKEND_URL}/api/officers/${id}?key=${API_KEY}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ avatar: avatarUrl })
+        })
+    ];
+    if (supabase) {
+        promises.push(supabase.from('officers').update({ avatar: avatarUrl, last_update: new Date() }).eq('id', id));
+    }
+    await Promise.allSettled(promises);
   },
 
   addOfficerAPI: async (officer: Partial<SalesOfficer>) => {

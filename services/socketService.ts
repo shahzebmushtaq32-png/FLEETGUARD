@@ -23,6 +23,8 @@ class SocketService {
     }
 
     try {
+        if (this.channel) supabase.removeChannel(this.channel);
+
         this.channel = supabase.channel('fleet-tracker', {
             config: {
                 broadcast: { self: true },
@@ -45,12 +47,12 @@ class SocketService {
                     this.onMessageCallback([payload.new as Partial<SalesOfficer>]);
                 }
             })
-            .subscribe((status: any) => {
+            .subscribe((status: string) => {
                 if (status === 'SUBSCRIBED') {
                     this.updateStatus('Broadcasting_Live');
                 } else if (status === 'CLOSED') {
                     this.updateStatus('Disconnected');
-                } else {
+                } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
                     this.updateStatus('Error');
                 }
             });
@@ -71,7 +73,6 @@ class SocketService {
   private updateStatus(newStatus: ConnectionStatus) {
     this.status = newStatus;
     if (this.onStatusChangeCallback) {
-        // Debounce or ensure state consistency
         this.onStatusChangeCallback(newStatus);
     }
   }
@@ -89,8 +90,13 @@ class SocketService {
   }
 
   async sendTelemetry(officer: Partial<SalesOfficer>) {
-    if (!this.channel || this.status !== 'Broadcasting_Live') return;
-    await this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer });
+    // Attempt send if channel exists, even if status is still 'Connecting'
+    if (!this.channel) return;
+    try {
+        await this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer });
+    } catch (e) {
+        console.error("Telemetry Broadcast Failed", e);
+    }
   }
 
   async sendChat(message: Message) {

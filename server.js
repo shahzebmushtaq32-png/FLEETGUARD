@@ -70,7 +70,7 @@ if (process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_
       region: 'auto',
       endpoint: getR2Endpoint(),
       credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        accessKeyId: process.env.R2_ACCOUNT_ID,
         secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
       },
     });
@@ -145,6 +145,16 @@ const initDB = async (retries = 3, delay = 2000) => {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      // SEED DEFAULT USERS IF EMPTY
+      const countRes = await pool.query('SELECT COUNT(*) FROM officers');
+      if (parseInt(countRes.rows[0].count) === 0) {
+        console.log("🌱 Seeding default nodes...");
+        await pool.query(
+          "INSERT INTO officers (id, name, password, role) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)",
+          ['admin', 'Root Administrator', 'admin', 'Admin', 'n1', 'James Wilson', '12345', 'Senior BDO']
+        );
+      }
 
       // Initial cleanup on boot
       await cleanupOldData();
@@ -229,6 +239,17 @@ app.post('/api/officers', authenticateToken, async (req, res) => {
   }
 });
 
+// Update specific profile fields (like avatar)
+app.patch('/api/officers/:id', authenticateToken, async (req, res) => {
+  const { avatar } = req.body;
+  try {
+    await pool.query('UPDATE officers SET avatar = $1 WHERE id = $2', [avatar, req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update avatar' });
+  }
+});
+
 app.delete('/api/officers/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM officers WHERE id = $1', [req.params.id]);
@@ -258,12 +279,23 @@ wss.on('connection', (ws) => {
     try {
       const data = JSON.parse(msg);
       if (data.type === 'TELEMETRY') {
-        const { id, lat, lng, battery, status } = data.payload;
+        const { id, lat, lng, battery, status, avatar } = data.payload;
+        // Broadcast immediately for UI reactivity
         broadcast([data.payload]);
-        await pool.query(
-          'UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5',
-          [lat, lng, battery, status, id]
-        );
+        
+        // Update primary database for persistence
+        if (avatar) {
+          await pool.query(
+            'UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, avatar=$5, last_update=NOW() WHERE id=$6',
+            [lat, lng, battery, status, avatar, id]
+          );
+        } else {
+          await pool.query(
+            'UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5',
+            [lat, lng, battery, status, id]
+          );
+        }
+
         await pool.query(
           'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
           [id, lat, lng, battery, status]

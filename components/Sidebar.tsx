@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { SalesOfficer } from '../types';
 
@@ -69,7 +70,8 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                     <div className="flex items-center gap-3 mb-3">
                         {/* Avatar */}
                         <div className="relative">
-                             <img src={off.avatar || 'https://via.placeholder.com/40'} className={`w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition-all ${isSelected ? 'grayscale-0' : ''}`} />
+                             {/* BUST CACHE: Key helps React identify when URL changed and forces reload */}
+                             <img key={off.avatar} src={off.avatar || 'https://via.placeholder.com/40'} className={`w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition-all ${isSelected ? 'grayscale-0' : ''}`} />
                              <div className={`absolute -bottom-1 -right-1 w-2.5 h-2.5 rounded-full border border-[#1e293b] ${off.status === 'Offline' ? 'bg-slate-600' : 'bg-emerald-500'}`}></div>
                         </div>
 
@@ -77,7 +79,6 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                         <div className="flex-1 min-w-0">
                             <h4 className="text-xs font-black text-white uppercase tracking-tight truncate">{off.name}</h4>
                             <div className="flex items-center gap-2 mt-0.5">
-                                {/* Native App Indicator */}
                                 {isNative ? (
                                     <svg className="w-3 h-3 text-emerald-400" fill="currentColor" viewBox="0 0 24 24"><title>Native Android Background Service</title><path d="M17.523 15.3414C17.523 15.3414 17.5644 15.3414 17.5644 15.3414C17.5644 15.3414 17.6059 15.3414 17.5644 15.3414C17.5644 15.3414 17.523 15.3414 17.523 15.3414ZM6.47696 15.3414C6.47696 15.3414 6.43542 15.3414 6.43542 15.3414C6.43542 15.3414 6.47696 15.3414 6.47696 15.3414C6.47696 15.3414 6.51849 15.3414 6.47696 15.3414ZM16.6343 11.2355C16.6343 11.2355 16.6343 11.2355 16.6343 11.2355L18.7731 7.52989C18.877 7.34718 18.8146 7.10636 18.6319 7.00255C18.4492 6.89874 18.2084 6.96102 18.1046 7.14373L15.9284 10.9158C14.7406 10.3718 13.4116 10.0562 12 10.0562C10.5884 10.0562 9.2594 10.3718 8.0716 10.9158L5.89542 7.14373C5.79161 6.96102 5.55079 6.89874 5.36809 7.00255C5.18538 7.10636 5.1231 7.34718 5.22691 7.52989L7.36569 11.2355C7.36569 11.2355 7.36569 11.2355 7.36569 11.2355C3.3375 12.3982 0.389648 15.8438 0.389648 20.0001H23.6104C23.6104 15.8438 20.6625 12.3982 16.6343 11.2355ZM6.47696 16.9234C5.97858 16.9234 5.58406 16.5289 5.58406 16.0305C5.58406 15.5322 5.97858 15.1376 6.47696 15.1376C6.97534 15.1376 7.36987 15.5322 7.36987 16.0305C7.36987 16.5289 6.97534 16.9234 6.47696 16.9234ZM17.523 16.9234C17.0247 16.9234 16.6301 16.5289 16.6301 16.0305C16.6301 15.5322 17.0247 15.1376 17.523 15.1376C18.0214 15.1376 18.4159 15.5322 18.4159 16.0305C18.4159 16.5289 18.0214 16.9234 17.523 16.9234Z" /></svg>
                                 ) : (
@@ -107,7 +108,7 @@ const Sidebar: React.FC<SidebarProps> = ({ devices, selectedId, onSelect }) => {
                              </span>
                         </div>
                         <span className="text-[8px] font-mono text-slate-600">
-                             1H+
+                             {off.status === 'Offline' ? 'OFFLINE' : 'ONLINE'}
                         </span>
                     </div>
                  </button>
