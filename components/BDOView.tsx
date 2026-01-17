@@ -2,8 +2,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, SalesOfficer, Incident, Message, DeploymentTask, EvidenceAsset, SalesLead } from '../types';
 import { socketService } from '../services/socketService';
-import { persistenceService } from '../services/persistenceService';
 import { r2Service } from '../services/r2Service';
+import { verifyBdoIdentity } from '../services/geminiService';
+import GeminiLiveVoice from './GeminiLiveVoice';
 
 interface BDOViewProps {
   user: User;
@@ -16,221 +17,240 @@ interface BDOViewProps {
   isOnline?: boolean;
 }
 
-// Extend Navigator for Battery API
-interface BatteryManager {
-    level: number;
-    charging: boolean;
-    addEventListener: (type: string, listener: () => void) => void;
-    removeEventListener: (type: string, listener: () => void) => void;
-}
-type NavigatorWithBattery = Navigator & {
-    getBattery?: () => Promise<BatteryManager>;
-};
-
-export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportIncident, wsStatus, isOnline = true }) => {
+export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, isOnline = true }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'leads' | 'jobs' | 'selfie'>('home');
-  const [currentStatus, setCurrentStatus] = useState(officer?.status || 'Offline');
+  const [currentStatus, setCurrentStatus] = useState<SalesOfficer['status']>(officer?.status || 'Offline');
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [isVerified, setIsVerified] = useState(!!officer?.avatar);
-  const [latency, setLatency] = useState(45); // Simulated latency
+  const [isSecurityLocked, setIsSecurityLocked] = useState(true);
+  const [securityError, setSecurityError] = useState<string | null>(null);
   
-  // Shift Timer State (8 Hours in seconds)
-  const [shiftTimeRemaining, setShiftTimeRemaining] = useState(8 * 60 * 60);
-
-  // PROTOCOL DELTA: Security State
-  const [isSecurityLocked, setIsSecurityLocked] = useState(false);
-  const securityTimerRef = useRef<any>(null);
+  // Strict Hardware States
+  const [permStatus, setPermStatus] = useState({
+    cam: 'pending',
+    geo: 'pending',
+    mock: 'pending'
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // --- HARDWARE ENROLLMENT & ANTI-MOCK ---
   useEffect(() => {
-    const timer = setInterval(() => {
-        setShiftTimeRemaining(prev => Math.max(0, prev - 1));
-        setLatency(Math.floor(Math.random() * 30) + 30);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+    const initHardware = async () => {
+      // 1. Camera Permission
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        stream.getTracks().forEach(t => t.stop());
+        setPermStatus(p => ({ ...p, cam: 'ok' }));
+      } catch (e) {
+        setPermStatus(p => ({ ...p, cam: 'fail' }));
+      }
 
-  const formatTime = (seconds: number) => {
-    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
-    return `${h}:${m}:${s}`;
-  };
-
-  useEffect(() => {
-    const hasPassedProtocol = sessionStorage.getItem('bdo_protocol_delta_passed');
-    if (!hasPassedProtocol) {
-        setIsSecurityLocked(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!officer) return;
-    let watchId: number;
-    let batteryLevel = 100;
-
-    const initBattery = async () => {
-        const nav = navigator as NavigatorWithBattery;
-        if (nav.getBattery) {
-            try {
-                const battery = await nav.getBattery();
-                batteryLevel = Math.round(battery.level * 100);
-            } catch (e) {}
-        }
-    };
-    initBattery();
-
-    const success = (pos: GeolocationPosition) => {
-        socketService.sendTelemetry({
-            id: officer.id,
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            battery: batteryLevel, 
-            status: currentStatus,
-            lastUpdate: new Date(),
-            telemetrySource: 'WEB' as const
-        });
+      // 2. Geolocation & Mock Check
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const c = pos.coords as any;
+            // Fake GPS Heuristics: Accuracy 0/1m or mocked flag
+            const isMocked = c.mocked === true || c.accuracy <= 1.0;
+            setPermStatus(p => ({ 
+              ...p, 
+              geo: 'ok', 
+              mock: isMocked ? 'fail' : 'ok' 
+            }));
+          },
+          () => setPermStatus(p => ({ ...p, geo: 'fail' })),
+          { enableHighAccuracy: true }
+        );
+      } else {
+        setPermStatus(p => ({ ...p, geo: 'fail' }));
+      }
     };
 
-    if (navigator.geolocation) {
-        watchId = navigator.geolocation.watchPosition(success, undefined, {
-            enableHighAccuracy: true,
-            maximumAge: 10000 
-        });
-    }
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [officer?.id, currentStatus]);
+    initHardware();
+  }, []);
 
+  // --- CAMERA MANAGEMENT ---
   useEffect(() => {
-    if (activeTab === 'selfie' || isSecurityLocked) startCamera();
+    if (isSecurityLocked || activeTab === 'selfie') startCamera();
     else stopCamera();
     return () => stopCamera();
-  }, [activeTab, isSecurityLocked]);
+  }, [isSecurityLocked, activeTab]);
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      if (streamRef.current) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } 
+      });
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      setSecurityError("Camera access denied.");
+    }
   };
 
   const stopCamera = () => {
-    streamRef.current?.getTracks().forEach(track => track.stop());
-    streamRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  const handleCapture = async (isSecurityCheck = false) => {
-    if (!videoRef.current || !canvasRef.current) return;
+  // --- IDENTITY VERIFICATION ---
+  const handleAuth = async () => {
+    if (!videoRef.current || !canvasRef.current || !officer) return;
     setIsCapturing(true);
+    setSecurityError(null);
+
     const context = canvasRef.current.getContext('2d');
     if (context) {
       canvasRef.current.width = videoRef.current.videoWidth;
       canvasRef.current.height = videoRef.current.videoHeight;
       context.drawImage(videoRef.current, 0, 0);
-      const imageData = canvasRef.current.toDataURL('image/jpeg', 0.6);
+      const imageData = canvasRef.current.toDataURL('image/jpeg', 0.8);
       
       try {
-          const filename = isSecurityCheck ? `security_${officer.id}.jpg` : `avatar_${officer.id}.jpg`;
-          const url = await r2Service.uploadEvidence(imageData, filename);
-          setCapturedPhoto(url);
-          if (isSecurityCheck) {
+          const aiResult = await verifyBdoIdentity(imageData);
+          if (aiResult.verified) {
+              const url = await r2Service.uploadEvidence(imageData, `auth_${officer.id}.jpg`);
+              setCapturedPhoto(url);
               setIsSecurityLocked(false);
-              sessionStorage.setItem('bdo_protocol_delta_passed', 'true');
+              setCurrentStatus('Active');
+              sessionStorage.setItem('bdo_session_secure', 'true');
+          } else {
+              setSecurityError(aiResult.welcomeMessage || "Verification failed: Professional uniform required.");
           }
-          setIsVerified(true);
-      } catch (e) {} finally {
+      } catch (e) {
+          setSecurityError("AI verification link timed out.");
+      } finally {
           setIsCapturing(false);
-          if (!isSecurityCheck) setActiveTab('home');
       }
     }
   };
+
+  // --- TELEMETRY BROADCAST ---
+  useEffect(() => {
+    if (!officer || isSecurityLocked || permStatus.geo !== 'ok' || permStatus.mock !== 'ok') return;
+
+    const interval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        socketService.sendTelemetry({
+          id: officer.id,
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          battery: officer.battery || 100,
+          status: currentStatus,
+          lastUpdate: new Date()
+        });
+      }, undefined, { enableHighAccuracy: true });
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [isSecurityLocked, currentStatus, officer?.id, permStatus]);
+
+  // --- BLOCKED SCREENS ---
+  if (permStatus.cam === 'fail' || permStatus.geo === 'fail') {
+    return (
+      <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-12 text-center text-white">
+        <div className="w-24 h-24 bg-red-500/20 rounded-[2rem] flex items-center justify-center mb-8 border border-red-500/30">
+            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        </div>
+        <h1 className="text-2xl font-black uppercase tracking-widest mb-4">Hardware Blocked</h1>
+        <p className="text-slate-400 text-xs uppercase tracking-[0.2em] leading-relaxed mb-10">BDO Mobile Grid requires active Camera and Geolocation to function. Please enable them in your device settings.</p>
+        <button onClick={() => window.location.reload()} className="bg-[#FFD100] text-[#003366] px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-2xl">Re-Enroll Device</button>
+      </div>
+    );
+  }
+
+  if (permStatus.mock === 'fail') {
+    return (
+      <div className="h-screen w-full bg-[#7f1d1d] flex flex-col items-center justify-center p-12 text-center text-white">
+        <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center mb-8 border border-white/20 animate-pulse">
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+        </div>
+        <h1 className="text-2xl font-black uppercase tracking-widest mb-4">Fake GPS Detected</h1>
+        <p className="text-white/70 text-xs uppercase tracking-[0.2em] leading-relaxed">Identity theft and location spoofing are prohibited. Turn off Mock Location apps to resume duty.</p>
+      </div>
+    );
+  }
+
+  // --- SECURITY AUTH SCREEN ---
+  if (isSecurityLocked) {
+    return (
+      <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-6 overflow-hidden">
+        <div className="w-full max-w-sm bg-white rounded-[3.5rem] p-10 shadow-2xl text-center relative z-10 border-[10px] border-[#003366]/5">
+            <div className="w-12 h-1.5 bg-[#FFD100] mx-auto rounded-full mb-10"></div>
+            <h2 className="text-2xl font-black text-[#003366] uppercase tracking-tight mb-2">Gate 01 Check</h2>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Biometric Identity Sync</p>
+            
+            <div className="relative rounded-[2.5rem] overflow-hidden aspect-square bg-[#001D3D] mb-8 border-[6px] border-slate-50 shadow-inner">
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                <div className="absolute inset-0 border-[2px] border-dashed border-cyan-400/30 rounded-[2rem] m-6"></div>
+                <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-cyan-400 shadow-[0_0_15px_cyan] animate-[scan_3s_infinite]"></div>
+            </div>
+
+            {securityError && (
+              <div className="mb-6 bg-red-50 p-4 rounded-2xl border border-red-100">
+                  <p className="text-[9px] font-black text-red-600 uppercase leading-relaxed">{securityError}</p>
+              </div>
+            )}
+
+            <button 
+                onClick={handleAuth} 
+                disabled={isCapturing} 
+                className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] tracking-[0.2em] shadow-xl active:scale-95 transition-all disabled:opacity-50"
+            >
+                {isCapturing ? 'Verifying...' : 'Authenticate Node'}
+            </button>
+            <button onClick={onLogout} className="mt-8 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] hover:text-red-500 transition-colors">Terminate Link</button>
+        </div>
+        <style>{` @keyframes scan { 0%, 100% { top: 10%; } 50% { top: 90%; } } `}</style>
+      </div>
+    );
+  }
 
   if (!officer) return null;
 
   return (
     <div className="h-full flex flex-col bg-[#f8fafc] font-sans relative overflow-hidden">
-       {/* Live Telemetry Bar */}
-       <div className="bg-[#001D3D] px-6 py-2 flex items-center justify-between border-b border-white/5">
-           <div className="flex items-center gap-2">
-               <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
-               <span className={`text-[7px] font-black uppercase tracking-widest ${isOnline ? 'text-emerald-400' : 'text-red-400'}`}>
-                 {isOnline ? 'Live Uplink Active' : 'Uplink Failed'}
-               </span>
+       {/* SECURE HUD HEADER */}
+       <div className="bg-[#001D3D] px-6 py-3 flex items-center justify-between border-b border-white/5">
+           <div className="flex items-center gap-3">
+               <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_rgba(52,211,153,0.8)]"></div>
+               <span className="text-[8px] font-black text-white/50 uppercase tracking-[0.2em]">ENCRYPTED_UPLINK: {officer.id}</span>
            </div>
-           <div className="flex gap-4">
-                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">Lat: {latency}ms</span>
-                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">WS: {wsStatus === 'Broadcasting_Live' ? 'LIVE' : 'SYNC'}</span>
+           <div className="flex gap-1.5">
+                {[1,2,3].map(i => <div key={i} className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-cyan-400/60' : 'bg-red-400/60'}`}></div>)}
            </div>
        </div>
 
-       {isSecurityLocked && (
-           <div className="absolute inset-0 z-[100] bg-[#001D3D] flex flex-col items-center justify-center p-6">
-               <div className="w-full max-w-sm bg-white rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden text-center">
-                    <h2 className="text-xl font-black text-[#003366] uppercase tracking-tight mb-2">Protocol Delta</h2>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-6">Security Authorization Required</p>
-                    
-                    <div className="relative rounded-3xl overflow-hidden aspect-square bg-slate-900 mb-8 border-4 border-slate-50 shadow-inner group">
-                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-                        <canvas ref={canvasRef} className="hidden" />
-                        
-                        {/* Face Guide Overlay */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40">
-                             <div className="w-48 h-64 border-2 border-dashed border-cyan-400 rounded-[6rem] flex items-center justify-center">
-                                 <div className="w-4 h-4 border-t-2 border-l-2 border-cyan-400 absolute top-12"></div>
-                                 <div className="w-4 h-4 border-t-2 border-r-2 border-cyan-400 absolute top-12 right-12"></div>
-                             </div>
-                        </div>
-                        <div className="absolute bottom-4 left-0 right-0 text-center">
-                            <span className="text-[8px] font-black text-cyan-400 uppercase tracking-widest bg-black/40 px-2 py-1 rounded">Align face for scan</span>
-                        </div>
-                    </div>
-
-                    <button 
-                        onClick={() => handleCapture(true)}
-                        disabled={isCapturing}
-                        className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-2xl uppercase text-[11px] tracking-[0.2em] shadow-lg active:scale-95 transition-all disabled:opacity-50"
-                    >
-                        {isCapturing ? 'Verifying Identity...' : 'Authorize Access'}
-                    </button>
-               </div>
-           </div>
-       )}
-
-       <header className="bg-[#003366] text-white px-6 pt-8 pb-10 rounded-b-[3rem] shadow-2xl relative z-10">
-          <div className="flex justify-between items-start mb-6">
-             <div className="flex gap-4 items-center">
-                <div className="w-16 h-16 bg-white rounded-2xl overflow-hidden border-4 border-white/20 shadow-2xl">
-                    <img src={capturedPhoto || 'https://via.placeholder.com/60'} className="w-full h-full object-cover" />
+       <header className="bg-[#003366] text-white px-6 pt-10 pb-12 rounded-b-[4.5rem] shadow-2xl relative z-10">
+          <div className="flex justify-between items-start mb-10">
+             <div className="flex gap-5 items-center">
+                <div className="w-16 h-16 bg-white rounded-[1.75rem] overflow-hidden border-4 border-white/20 shadow-2xl p-0.5">
+                    <img src={capturedPhoto || 'https://via.placeholder.com/150'} className="w-full h-full object-cover rounded-[1.5rem]" />
                 </div>
                 <div>
                     <h2 className="text-xl font-black uppercase tracking-tight leading-none mb-1.5">{officer.name}</h2>
-                    <div className="flex items-center gap-2">
-                         <span className="text-[9px] bg-[#FFD100] text-[#003366] px-2 py-0.5 rounded-full font-black uppercase tracking-widest">{officer.role}</span>
-                         <div className="flex items-center gap-1.5 text-[8px] font-mono text-cyan-300 bg-white/5 px-2 py-0.5 rounded-full">
-                            <div className="w-1 h-1 bg-cyan-400 rounded-full animate-pulse"></div>
-                            {formatTime(shiftTimeRemaining)}
-                         </div>
-                    </div>
+                    <span className="text-[9px] bg-[#FFD100] text-[#003366] px-3 py-1 rounded-full font-black uppercase tracking-widest">{officer.role}</span>
                 </div>
              </div>
-             <button onClick={onLogout} className="bg-white/10 p-3 rounded-2xl hover:bg-white/20 transition-all text-white/60">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+             <button onClick={onLogout} className="bg-white/10 p-4 rounded-2xl text-white/60 transition-all active:scale-90">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
              </button>
           </div>
 
-          <div className="flex bg-[#002855] p-1.5 rounded-2xl border border-white/5 shadow-inner">
+          <div className="flex bg-[#002855] p-2 rounded-[2.25rem] border border-white/5 shadow-inner">
                 {['Active', 'Break'].map(status => (
                     <button 
-                        key={status}
+                        key={status} 
                         onClick={() => setCurrentStatus(status as any)} 
-                        className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${currentStatus === status ? 'bg-[#FFD100] text-[#003366] shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                        className={`flex-1 py-4 rounded-[1.75rem] text-[10px] font-black uppercase tracking-widest transition-all ${currentStatus === status ? 'bg-[#FFD100] text-[#003366] shadow-xl' : 'text-slate-500 hover:text-slate-300'}`}
                     >
-                        <div className={`w-1.5 h-1.5 rounded-full ${currentStatus === status ? 'bg-[#003366]' : 'bg-slate-700'}`}></div>
                         {status}
                     </button>
                 ))}
@@ -239,46 +259,36 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
 
        <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
            {activeTab === 'home' && (
-               <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-bottom-4 duration-500">
-                   <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
-                       <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Today's Visits</p>
+               <div className="grid grid-cols-2 gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center justify-center">
+                       <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Daily Grid</p>
                        <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount}</p>
                    </div>
-                   <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col items-center">
-                       <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Quota Reach</p>
-                       <div className="relative w-20 h-20">
-                           <svg className="w-full h-full transform -rotate-90">
-                               <circle cx="40" cy="40" r="34" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
-                               <circle cx="40" cy="40" r="34" stroke="#003366" strokeWidth="8" fill="transparent" strokeDasharray={`${(officer.quotaProgress / 100) * 213} 213`} strokeLinecap="round" />
-                           </svg>
-                           <span className="absolute inset-0 flex items-center justify-center text-sm font-black text-[#003366]">{officer.quotaProgress}%</span>
-                       </div>
+                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center justify-center">
+                       <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Eff %</p>
+                       <p className="text-2xl font-black text-[#003366]">{officer.quotaProgress}%</p>
                    </div>
-                   <div className="col-span-2 bg-[#FFD100] p-6 rounded-[2.5rem] shadow-lg shadow-orange-200/50 flex items-center justify-between">
-                       <div>
-                           <h4 className="text-[10px] font-black text-[#003366] uppercase tracking-widest mb-1">Pipeline Volume</h4>
-                           <p className="text-2xl font-black text-[#003366]">₱{(officer.pipelineValue/1000000).toFixed(1)}M</p>
+                   <div className="col-span-2 bg-white p-8 rounded-[3.5rem] shadow-xl border border-slate-50 flex items-center justify-between relative overflow-hidden group">
+                       <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFD100]/10 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700"></div>
+                       <div className="relative z-10">
+                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Pipeline Vol</h4>
+                           <p className="text-3xl font-black text-[#003366]">₱{(officer.pipelineValue/1000000).toFixed(1)}M</p>
                        </div>
-                       <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-[#003366]">
-                           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                       </div>
+                       <GeminiLiveVoice />
                    </div>
                </div>
            )}
 
            {activeTab === 'leads' && (
-               <div className="space-y-4 animate-in slide-in-from-bottom-4 duration-500">
+               <div className="space-y-4">
                    {officer.leads.map(lead => (
-                       <div key={lead.id} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between group">
+                       <div key={lead.id} className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center justify-between hover:border-[#FFD100]/40 transition-colors">
                            <div>
                                <h4 className="text-sm font-black text-[#003366] uppercase tracking-tight mb-1">{lead.clientName}</h4>
-                               <div className="flex items-center gap-2">
-                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{lead.stage}</span>
-                                    <span className="text-[8px] font-black text-cyan-600 uppercase tracking-widest">₱{(lead.value/1000).toFixed(0)}K</span>
-                               </div>
+                               <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{lead.stage} • ₱{(lead.value/1000).toFixed(0)}K</span>
                            </div>
-                           <button className="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 hover:bg-[#FFD100] hover:text-[#003366] flex items-center justify-center transition-all">
-                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                           <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.clientName)}`, '_blank')} className="w-12 h-12 rounded-2xl bg-slate-50 text-[#003366] flex items-center justify-center active:scale-90 transition-all">
+                               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
                            </button>
                        </div>
                    ))}
@@ -286,20 +296,25 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
            )}
 
            {activeTab === 'selfie' && (
-                <div className="h-full flex flex-col animate-in zoom-in-95 duration-300 pb-20">
-                    <div className="flex-1 bg-black rounded-[3rem] overflow-hidden relative border-8 border-white shadow-2xl">
+                <div className="h-full flex flex-col">
+                    <div className="flex-1 bg-black rounded-[3.5rem] overflow-hidden relative border-4 border-white shadow-2xl">
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-                        <canvas ref={canvasRef} className="hidden" />
-                        <div className="absolute inset-0 border-2 border-white/10 pointer-events-none"></div>
-                        <div className="absolute bottom-8 left-0 right-0 flex justify-center">
-                            <button 
-                                onClick={() => handleCapture(false)}
-                                disabled={isCapturing}
-                                className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-white/20 active:scale-90 transition-all backdrop-blur-md"
-                            >
-                                <div className="w-16 h-16 bg-white rounded-full shadow-2xl flex items-center justify-center">
-                                    {isCapturing && <div className="w-8 h-8 border-4 border-[#003366] border-t-transparent rounded-full animate-spin"></div>}
-                                </div>
+                        <div className="absolute bottom-12 left-0 right-0 flex justify-center">
+                            <button onClick={async () => {
+                                setIsCapturing(true);
+                                const context = canvasRef.current?.getContext('2d');
+                                if (context && videoRef.current) {
+                                    canvasRef.current!.width = videoRef.current.videoWidth;
+                                    canvasRef.current!.height = videoRef.current.videoHeight;
+                                    context.drawImage(videoRef.current, 0, 0);
+                                    const img = canvasRef.current!.toDataURL('image/jpeg', 0.6);
+                                    await r2Service.uploadEvidence(img, `audit_${Date.now()}.jpg`);
+                                    alert("Grid Audit Uploaded.");
+                                    setActiveTab('home');
+                                }
+                                setIsCapturing(false);
+                            }} disabled={isCapturing} className="w-20 h-20 rounded-full border-[6px] border-white flex items-center justify-center bg-white/20 active:scale-90 transition-transform">
+                                <div className="w-14 h-14 bg-white rounded-full shadow-lg"></div>
                             </button>
                         </div>
                     </div>
@@ -307,23 +322,25 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
            )}
        </main>
 
-       <nav className="bg-white px-6 pb-10 pt-4 border-t border-slate-100 flex justify-between rounded-t-[3rem] shadow-[0_-15px_40px_rgba(0,0,0,0.08)] relative z-20">
+       <nav className="bg-white px-8 pb-12 pt-6 border-t border-slate-100 flex justify-between rounded-t-[4.5rem] shadow-[0_-20px_60px_rgba(0,0,0,0.05)] relative z-20">
            <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon="home" label="HUD" />
-           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} icon="users" label="Leads" />
-           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs')} icon="briefcase" label="Tasks" />
+           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} icon="users" label="Grid" />
+           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs')} icon="briefcase" label="Jobs" />
            <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie')} icon="camera" label="Audit" />
        </nav>
+
+       <canvas ref={canvasRef} className="hidden" />
     </div>
   );
 };
 
 const NavButton = ({ active, onClick, icon, label }: any) => (
-    <button onClick={onClick} className={`flex flex-col items-center gap-2 p-2 w-16 transition-all group`}>
-        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${active ? 'bg-[#003366] text-[#FFD100] shadow-xl translate-y-[-8px]' : 'text-slate-300 hover:text-slate-400'}`}>
-             {icon === 'home' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>}
-             {icon === 'users' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>}
-             {icon === 'briefcase' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
-             {icon === 'camera' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+    <button onClick={onClick} className="flex flex-col items-center gap-2 p-1 w-16 group transition-all">
+        <div className={`w-12 h-12 rounded-[1.5rem] flex items-center justify-center transition-all duration-300 ${active ? 'bg-[#003366] text-[#FFD100] shadow-2xl -translate-y-2' : 'text-slate-200 hover:text-slate-400'}`}>
+             {icon === 'home' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} /></svg>}
+             {icon === 'users' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} /></svg>}
+             {icon === 'briefcase' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} /></svg>}
+             {icon === 'camera' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} /></svg>}
         </div>
         <span className={`text-[8px] font-black uppercase tracking-[0.2em] transition-colors ${active ? 'text-[#003366]' : 'text-slate-300'}`}>{label}</span>
     </button>

@@ -14,7 +14,14 @@ export const verifyBdoIdentity = async (base64Image: string) => {
         ]
       },
       config: {
-        systemInstruction: "You are a specialized security agent for BDO Bank. Analyze the provided image to verify if it depicts a legitimate bank officer in uniform or a professional setting. Output only the specified JSON format.",
+        systemInstruction: `You are the BDO Biometric Gatekeeper. 
+        Analyze the image for:
+        1. BDO OFFICIAL UNIFORM: Blue/white formal attire or BDO polo.
+        2. BANK CONTEXT: Office setting or ID lanyard.
+        3. LIVENESS: Must be a real person.
+        
+        Strictness: MAXIMUM. If there is no clear uniform, return verified: false.
+        Return JSON with verified, confidence, and welcomeMessage.`,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -28,12 +35,11 @@ export const verifyBdoIdentity = async (base64Image: string) => {
       }
     });
 
-    // Access .text property directly (not a method)
-    const text = response.text || '{}';
+    const text = response.text || '{"verified": false, "confidence": 0, "welcomeMessage": "Analysis Failure"}';
     return JSON.parse(text);
   } catch (error) {
     console.error("Gemini Verification Error:", error);
-    return { verified: true, confidence: 100, welcomeMessage: "Manual Override Active" };
+    return { verified: false, confidence: 0, welcomeMessage: "Uplink Error." };
   }
 };
 

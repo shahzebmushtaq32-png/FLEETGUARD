@@ -1,86 +1,122 @@
 
-import React, { useState } from 'react';
-import { socketService } from '../services/socketService';
+import React, { useState, useEffect } from 'react';
+import { persistenceService } from '../services/persistenceService';
 
 const ArchitectureGuide: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'status' | 'url' | 'error'>('status');
-  const [customUrl, setCustomUrl] = useState(localStorage.getItem('bdo_fleet_ws_url') || 'fleetguard-hrwf.onrender.com');
+  const [neonStats, setNeonStats] = useState<any>(null);
 
-  const handleSaveUrl = () => {
-    let cleaned = customUrl.trim()
-      .replace(/^https?:\/\//, '')
-      .replace(/^wss?:\/\//, '')
-      .replace(/\/$/, '');
-    
-    localStorage.setItem('bdo_fleet_ws_url', `wss://${cleaned}`);
-    socketService.disconnect();
-    window.location.reload();
-  };
+  useEffect(() => {
+    const fetchStats = async () => {
+        const stats = await persistenceService.getNeonStats();
+        setNeonStats(stats);
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div className="flex flex-col gap-5 text-white font-sans animate-in fade-in slide-in-from-bottom-4">
-      {/* Tab Navigation */}
-      <div className="flex gap-1 p-1 bg-slate-900 rounded-2xl border border-slate-800">
-        <button onClick={() => setActiveTab('status')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all ${activeTab === 'status' ? 'bg-emerald-600 text-white' : 'text-slate-500'}`}>1. Status</button>
-        <button onClick={() => setActiveTab('url')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all ${activeTab === 'url' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>2. Sync</button>
-        <button onClick={() => setActiveTab('error')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all ${activeTab === 'error' ? 'bg-red-600 text-white' : 'text-slate-500'}`}>Help</button>
+    <div className="flex flex-col gap-8 text-white font-sans animate-in fade-in slide-in-from-bottom-4">
+      
+      {/* Live Data Explorer Overlay */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+           <StatBox 
+              label="Neon Nodes" 
+              value={neonStats?.activeNodes || '--'} 
+              unit="OFFICERS" 
+              color="blue" 
+           />
+           <StatBox 
+              label="Neon History" 
+              value={neonStats?.telemetryPoints || '--'} 
+              unit="POINTS" 
+              color="cyan" 
+           />
+           <StatBox 
+              label="Sync Cluster" 
+              value="ACTIVE" 
+              unit="SUPABASE" 
+              color="emerald" 
+           />
       </div>
 
-      {activeTab === 'status' && (
-        <div className="space-y-4 animate-in zoom-in-95">
-           <div className="bg-emerald-500/10 border border-emerald-500/30 p-6 rounded-[2rem]">
-              <div className="flex justify-center mb-4">
-                <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.4)]">
-                  <svg className="w-6 h-6 text-[#003366]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+      {/* Visual Map */}
+      <div className="bg-[#1e293b] border border-white/10 rounded-[2.5rem] p-12 relative overflow-hidden">
+         <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
+         
+         <div className="relative flex flex-col items-center gap-12">
+            
+            {/* Mobile Application layer */}
+            <div className="flex flex-col items-center">
+                <div className="bg-white/5 border border-white/20 rounded-2xl px-8 py-4 shadow-xl flex items-center gap-4 group hover:bg-white/10 transition-all cursor-help">
+                    <div className="w-3 h-3 rounded-full bg-amber-400 animate-pulse"></div>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white">BDO Mobile App (Native + Web)</span>
                 </div>
-              </div>
-              <h4 className="text-[12px] font-black uppercase text-emerald-400 mb-1 text-center">System Live</h4>
-              <p className="text-[9px] text-slate-400 text-center uppercase tracking-widest font-bold">fleetguard-hrwf is active</p>
-              
-              <div className="mt-6 space-y-3">
-                 <div className="flex justify-between items-center text-[9px]">
-                    <span className="text-slate-500 font-bold uppercase">Render Status</span>
-                    <span className="text-emerald-400 font-black">STABLE</span>
-                 </div>
-                 <div className="flex justify-between items-center text-[9px]">
-                    <span className="text-slate-500 font-bold uppercase">Socket Port</span>
-                    <span className="text-blue-400 font-black">10000</span>
-                 </div>
-              </div>
-           </div>
-        </div>
-      )}
+                <div className="h-12 w-px bg-gradient-to-b from-amber-400 to-transparent"></div>
+            </div>
 
-      {activeTab === 'url' && (
-        <div className="space-y-4">
-           <div className="bg-blue-500/10 border border-blue-500/30 p-5 rounded-3xl">
-              <h4 className="text-[11px] font-black uppercase text-blue-400 mb-3">Target Endpoint</h4>
-              <div className="relative mb-4">
-                 <input 
-                    type="text" 
-                    value={customUrl}
-                    onChange={(e) => setCustomUrl(e.target.value)}
-                    className="w-full bg-black/40 border border-blue-500/20 rounded-xl px-4 py-3 text-[11px] font-mono text-blue-300 focus:outline-none focus:border-blue-500/50"
-                 />
-              </div>
-              <button 
-                 onClick={handleSaveUrl}
-                 className="w-full bg-blue-600 text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest shadow-lg"
-              >
-                 Force Sync URL
-              </button>
-           </div>
-        </div>
-      )}
+            {/* Neon primary layer */}
+            <div className="flex flex-col items-center relative">
+                 <div className="bg-blue-500/10 border border-blue-500/40 rounded-3xl px-12 py-6 shadow-2xl backdrop-blur-md">
+                     <div className="flex items-center gap-3 mb-2">
+                        <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>
+                        <span className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-400">NEON DB (Primary Storage)</span>
+                     </div>
+                     <p className="text-[8px] text-slate-500 uppercase font-bold text-center">Serverless Postgres / History Layer</p>
+                 </div>
+                 
+                 <div className="flex justify-between w-full max-w-[400px] mt-8">
+                     <div className="flex flex-col items-center">
+                         <div className="h-10 w-px bg-gradient-to-b from-blue-400 to-transparent"></div>
+                         <NodeBox 
+                            title="Neon_Node_A" 
+                            infra="Oregon (AWS)" 
+                            color="blue" 
+                            desc="History Persistence" 
+                         />
+                     </div>
+                     <div className="flex flex-col items-center">
+                         <div className="h-10 w-px bg-gradient-to-b from-emerald-400 to-transparent"></div>
+                         <NodeBox 
+                            title="Supabase_Node" 
+                            infra="Realtime Presence" 
+                            color="emerald" 
+                            desc="Session Sync" 
+                         />
+                     </div>
+                 </div>
+            </div>
 
-      {activeTab === 'error' && (
-        <div className="bg-slate-800/50 p-5 rounded-3xl border border-slate-700">
-           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">No Data?</h4>
-           <p className="text-[9px] text-slate-300 leading-relaxed">If markers aren't moving yet, verify your <code>NEON_DATABASE_URL</code> in Render dashboard matches the one from your Neon console.</p>
-        </div>
-      )}
+            {/* Shared Services Layer */}
+            <div className="bg-[#0f172a]/50 p-6 rounded-3xl border border-white/5 w-full text-center">
+                 <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Unified Failover Bus</span>
+                 <div className="flex justify-center gap-4">
+                      <div className="px-4 py-2 bg-purple-500/10 rounded-xl text-purple-400 text-[8px] font-black uppercase border border-purple-500/20">Gemini AI Matcher</div>
+                      <div className="px-4 py-2 bg-cyan-500/10 rounded-xl text-cyan-400 text-[8px] font-black uppercase border border-cyan-500/20">Cloudflare R2 Assets</div>
+                 </div>
+            </div>
+         </div>
+      </div>
     </div>
   );
 };
+
+const StatBox = ({ label, value, unit, color }: any) => (
+    <div className={`bg-${color}-500/5 border border-${color}-500/10 rounded-2xl p-4 flex flex-col items-center text-center`}>
+        <span className={`text-[8px] font-black uppercase text-${color}-400/60 tracking-widest mb-1`}>{label}</span>
+        <div className="flex items-baseline gap-2">
+            <span className="text-xl font-black text-white">{value}</span>
+            <span className="text-[8px] font-mono text-slate-600">{unit}</span>
+        </div>
+    </div>
+);
+
+const NodeBox = ({ title, infra, color, desc }: any) => (
+    <div className={`bg-${color}-500/5 border border-${color}-500/20 rounded-2xl p-4 w-44 text-center shadow-xl`}>
+        <h4 className={`text-[9px] font-black uppercase text-${color}-400 mb-1`}>{title}</h4>
+        <p className="text-[7px] font-mono text-slate-500 mb-3">{infra}</p>
+        <p className="text-[8px] text-slate-400 uppercase font-bold leading-tight">{desc}</p>
+    </div>
+);
 
 export default ArchitectureGuide;

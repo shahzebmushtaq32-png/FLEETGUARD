@@ -4,37 +4,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#003366">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BDO Fleet">
   <title>BDO Fleet Guard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   <style>
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; touch-action: manipulation; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; touch-action: manipulation; background: #001D3D; }
     #map { height: 100%; width: 100%; }
     .leaflet-container { font-family: inherit; background: #0f172a; }
-    
-    /* Mobile Scrollbar Polish */
     .custom-scrollbar::-webkit-scrollbar { width: 4px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
 
-    /* Scanline Effect */
-    .scanline {
-      width: 100%;
-      height: 100px;
-      z-index: 10;
-      background: linear-gradient(0deg, rgba(0, 0, 0, 0) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(0, 0, 0, 0) 100%);
-      opacity: 0.1;
-      position: absolute;
-      bottom: 100%;
-      animation: scanline 6s linear infinite;
-    }
-
-    @keyframes scanline {
-      0% { bottom: 100%; }
-      100% { bottom: -100%; }
+    /* Production Watermark */
+    .prod-watermark {
+        position: fixed;
+        bottom: 120px;
+        right: -40px;
+        transform: rotate(-90deg);
+        font-size: 8px;
+        font-weight: 900;
+        color: rgba(255, 255, 255, 0.05);
+        letter-spacing: 0.5em;
+        pointer-events: none;
+        z-index: 1000;
+        text-transform: uppercase;
     }
   </style>
 <script type="importmap">
@@ -60,6 +57,7 @@
 </script>
 </head>
 <body class="bg-[#0f172a] text-gray-100 overflow-hidden">
+  <div class="prod-watermark">BDO_SECURE_GRID_V3_FINAL</div>
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>

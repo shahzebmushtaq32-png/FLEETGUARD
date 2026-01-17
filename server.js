@@ -1,3 +1,4 @@
+
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -11,6 +12,7 @@ const { Pool } = pg;
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
+const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // Run once every 24 hours
 
 // SECURITY KEYS
 const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122"; 
@@ -40,6 +42,20 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000
 });
 
+// --- DATA CLEANUP LOGIC (MONTHLY PURGE) ---
+const cleanupOldData = async () => {
+  console.log("🕒 Starting Data Lifecycle Cleanup (Target: >30 Days)...");
+  try {
+    const result = await pool.query(`
+      DELETE FROM location_history 
+      WHERE timestamp < NOW() - INTERVAL '30 days'
+    `);
+    console.log(`✅ Cleanup Complete. Purged ${result.rowCount} legacy telemetry records.`);
+  } catch (err) {
+    console.error("❌ Cleanup Failed:", err.message);
+  }
+};
+
 // --- STORAGE CONFIGURATION (R2) ---
 const getR2Endpoint = () => {
   if (process.env.R2_ENDPOINT) return process.env.R2_ENDPOINT.trim();
@@ -58,8 +74,6 @@ if (process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_
         secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
       },
     });
-} else {
-    console.warn("⚠️ Cloudflare R2 credentials missing. File uploads will fail.");
 }
 
 const app = express();
@@ -96,33 +110,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-const requireRole = (allowedRoles) => (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: 'User context missing' });
-    if (req.user.role === 'Admin') return next();
-    if (!allowedRoles.includes(req.user.role)) {
-        return res.status(403).json({ error: 'Forbidden: Insufficient Permissions' });
-    }
-    next();
-};
-
-// --- HELPER: GEOMETRY ---
-function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
-  const R = 6371e3; // meters
-  const dLat = deg2rad(lat2 - lat1);
-  const dLon = deg2rad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-function deg2rad(deg) {
-  return deg * (Math.PI / 180);
-}
-
-// --- DB INIT & CLEANUP ---
+// --- DB INIT ---
 const initDB = async (retries = 3, delay = 2000) => {
   for (let i = 0; i < retries; i++) {
     try {
@@ -149,7 +137,7 @@ const initDB = async (retries = 3, delay = 2000) => {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS location_history (
           id SERIAL PRIMARY KEY,
-          node_id TEXT REFERENCES officers(id),
+          node_id TEXT REFERENCES officers(id) ON DELETE CASCADE,
           lat DOUBLE PRECISION,
           lng DOUBLE PRECISION,
           battery INTEGER,
@@ -157,19 +145,11 @@ const initDB = async (retries = 3, delay = 2000) => {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
-      
-      // STORAGE OPTIMIZATION: Auto-prune data older than 7 days on boot
-      await pool.query("DELETE FROM location_history WHERE timestamp < NOW() - INTERVAL '7 days'");
-      console.log("🧹 DB Cleanup: Removed history older than 7 days to save storage.");
 
-      const checkAdmin = await pool.query("SELECT * FROM officers WHERE id = 'admin'");
-      if (checkAdmin.rowCount === 0) {
-           await pool.query(`
-            INSERT INTO officers (id, name, password, role, status)
-            VALUES ('admin', 'System Administrator', 'admin12', 'Admin', 'Active')
-          `);
-          console.log("✅ Admin account seeded.");
-      }
+      // Initial cleanup on boot
+      await cleanupOldData();
+      // Schedule recurring cleanup
+      setInterval(cleanupOldData, CLEANUP_INTERVAL);
       
       return;
     } catch (err) {
@@ -182,30 +162,47 @@ const initDB = async (retries = 3, delay = 2000) => {
 initDB();
 
 // --- ROUTES ---
-app.get('/', (req, res) => res.status(200).send('FleetGuard Realtime Server Active'));
 app.get('/health', (req, res) => res.status(200).send('FleetGuard Online'));
+
+app.post('/api/maintenance/cleanup', requireApiKey, async (req, res) => {
+  await cleanupOldData();
+  res.json({ success: true, message: "Manual monthly cleanup triggered." });
+});
+
+app.get('/api/neon-stats', requireApiKey, async (req, res) => {
+  try {
+    const officersCount = await pool.query('SELECT COUNT(*) FROM officers');
+    const historyCount = await pool.query('SELECT COUNT(*) FROM location_history');
+    res.json({
+      status: 'CONNECTED',
+      provider: 'Neon.tech',
+      activeNodes: parseInt(officersCount.rows[0].count),
+      telemetryPoints: parseInt(historyCount.rows[0].count),
+      pool: {
+        totalConnections: pool.totalCount,
+        idleConnections: pool.idleCount,
+        waitingRequests: pool.waitingCount
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'ERROR', message: err.message });
+  }
+});
 
 app.post('/api/login', requireApiKey, async (req, res) => {
   const { id, password } = req.body;
-  const cleanId = id ? id.trim() : '';
-  const cleanPass = password ? password.trim() : '';
-  
   try {
-    const result = await pool.query('SELECT * FROM officers WHERE id = $1', [cleanId]);
+    const result = await pool.query('SELECT * FROM officers WHERE id = $1', [id]);
     const user = result.rows[0];
-
-    if (!user || user.password !== cleanPass) {
+    if (!user || user.password !== password) {
       return res.status(401).json({ error: 'Invalid Credentials' });
     }
-
     const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '12h' });
-
     res.json({
       token,
       user: { id: user.id, name: user.name, role: user.role, avatar: user.avatar }
     });
   } catch (err) {
-    console.error("❌ Login Error:", err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -213,238 +210,68 @@ app.post('/api/login', requireApiKey, async (req, res) => {
 app.get('/api/officers', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM officers ORDER BY name ASC');
-    const officers = result.rows.map(o => ({
-      ...o,
-      lastUpdate: o.last_update,
-      telemetrySource: o.telemetry_source || 'WEB',
-      appVersion: o.app_version,
-      networkType: '5G', 
-      leads: [], history: [], evidence: [], tasks: []
-    }));
-    res.json(officers);
+    res.json(result.rows.map(o => ({ ...o, lastUpdate: o.last_update, leads: [], history: [], evidence: [], tasks: [] })));
   } catch (err) {
     res.status(500).json({ error: 'Database Fetch Error' });
   }
 });
 
-app.post('/api/officers', authenticateToken, requireRole(['Admin']), async (req, res) => {
+app.post('/api/officers', authenticateToken, async (req, res) => {
   const { id, name, password, role, avatar } = req.body;
   try {
     await pool.query(
-      'INSERT INTO officers (id, name, password, role, avatar) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
+      'INSERT INTO officers (id, name, password, role, avatar) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name=$2, role=$4, avatar=$5',
       [id, name, password, role, avatar]
     );
-    const newOfficer = { id, name, role, avatar, status: 'Offline' };
-    broadcast({ type: 'ROSTER_UPDATE', payload: newOfficer });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to add officer' });
+    res.status(500).json({ error: 'Failed to add officer to Neon' });
   }
 });
 
-app.delete('/api/officers/:id', authenticateToken, requireRole(['Admin']), async (req, res) => {
+app.delete('/api/officers/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM officers WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to delete officer' });
+    res.status(500).json({ error: 'Failed to delete officer from Neon' });
   }
 });
 
-app.get('/api/history/:nodeId', authenticateToken, async (req, res) => {
-  try {
-    // Limit to 50 points to save bandwidth
-    const result = await pool.query(
-      'SELECT lat, lng, timestamp FROM location_history WHERE node_id = $1 ORDER BY timestamp DESC LIMIT 50',
-      [req.params.nodeId]
-    );
-    res.json(result.rows.reverse());
-  } catch (err) {
-    res.status(500).json({ error: 'History Fetch Error' });
-  }
-});
-
-app.post('/api/upload-proxy', authenticateToken, async (req, res) => {
-  const { fileName, fileData } = req.body;
-  if (!r2) return res.status(503).json({ error: "Storage Service Unavailable" });
-  
-  const key = `evidence/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-  const bucketName = process.env.R2_BUCKET_NAME || 'bdo-fleet-assets';
-  
-  try {
-    const buffer = Buffer.from(fileData.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-    await r2.send(new PutObjectCommand({
-      Bucket: bucketName,
-      Key: key,
-      Body: buffer,
-      ContentType: 'image/jpeg'
-    }));
-    const url = await getSignedUrl(r2, new GetObjectCommand({
-      Bucket: bucketName, 
-      Key: key
-    }), { expiresIn: 604800 }); 
-    res.json({ publicUrl: url });
-  } catch (err) {
-    console.error("R2 Upload Failed:", err);
-    res.status(500).json({ error: 'Storage Upload Failed' });
-  }
-});
-
-// --- WEBSOCKET SERVER & BATCH PROCESSING ---
+// WEBSOCKET LOGIC
 const broadcast = (msg) => {
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN && client.clientType === 'dashboard') {
+    if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(msg));
     }
   });
 };
 
-// MEMORY BUFFER
-const WRITE_BUFFER = {
-    updates: new Map(), // Key: OfficerID, Value: Data
-    history: []         // Array of history items
-};
-
-// Track last saved location to implement "Significant Motion" filter
-const LAST_SAVED_LOCATIONS = new Map(); // Key: OfficerID, Value: {lat, lng}
-
-/**
- * CORE FLUSH LOGIC
- * Saves buffered data to NeonDB.
- */
-const flushToDB = async () => {
-    if (WRITE_BUFFER.updates.size === 0 && WRITE_BUFFER.history.length === 0) return;
-
-    console.log(`[DB] Starting batch write (Updates: ${WRITE_BUFFER.updates.size}, History: ${WRITE_BUFFER.history.length})`);
-    
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        // 1. Bulk Update Current Status
-        if (WRITE_BUFFER.updates.size > 0) {
-            const updates = Array.from(WRITE_BUFFER.updates.values());
-            for (const u of updates) {
-                await client.query(
-                    `UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW(), telemetry_source=$5, app_version=$6 WHERE id=$7`,
-                    [u.lat, u.lng, u.battery, u.status, u.telemetrySource || 'WEB', u.appVersion || '1.0.0', u.id]
-                );
-            }
-            WRITE_BUFFER.updates.clear();
-        }
-
-        // 2. Bulk Insert History
-        if (WRITE_BUFFER.history.length > 0) {
-            const batch = WRITE_BUFFER.history.splice(0, 50); 
-            for (const h of batch) {
-                await client.query(
-                  'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
-                  [h.id, h.lat, h.lng, h.battery, h.status]
-                );
-            }
-        }
-
-        await client.query('COMMIT');
-        console.log(`[DB] Batch write complete.`);
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error("[DB] Batch Write Failed:", e.message);
-    } finally {
-        client.release();
-    }
-};
-
-/**
- * ECO-MODE SCHEDULER
- * Flush only every 15 MINUTES (900000ms).
- * This allows NeonDB to 'Auto-Suspend' (Scale to 0) between writes.
- * Neon suspends after 5 mins of inactivity.
- * 15 min interval = 5 mins active + 10 mins suspended.
- * This effectively reduces billable hours by ~66%.
- */
-setInterval(flushToDB, 900000); 
-
-/**
- * GRACEFUL SHUTDOWN
- * If Render restarts the server, flush RAM data to DB immediately so nothing is lost.
- */
-const shutdown = async () => {
-    console.log("[System] Shutting down, flushing buffers...");
-    await flushToDB();
-    process.exit(0);
-};
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientKey = url.searchParams.get('key');
-  
-  if (clientKey !== WS_API_KEY) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-  
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
   });
 });
 
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  ws.clientType = url.searchParams.get('type') || 'iot';
-  ws.isAlive = true;
-  ws.on('pong', () => ws.isAlive = true);
-
+wss.on('connection', (ws) => {
   ws.on('message', async (msg) => {
     try {
       const data = JSON.parse(msg);
       if (data.type === 'TELEMETRY') {
-        const { id, lat, lng, battery, status, telemetrySource, appVersion } = data.payload;
-
-        // 1. Broadcast IMMEDIATELY (Live View is always 60fps real-time)
-        // This bypasses DB, so it works even when DB is sleeping.
+        const { id, lat, lng, battery, status } = data.payload;
         broadcast([data.payload]);
-
-        // 2. Buffer Latest Status (Always keep 'last known' updated)
-        WRITE_BUFFER.updates.set(id, { id, lat, lng, battery, status, telemetrySource, appVersion });
-        
-        // 3. Smart History Filter (COMPUTE SAVER)
-        // Only save to history DB if moved > 30 meters
-        if (lat && lng) {
-             const lastLoc = LAST_SAVED_LOCATIONS.get(id);
-             let shouldSave = false;
-
-             if (!lastLoc) {
-                 shouldSave = true;
-             } else {
-                 const dist = getDistanceFromLatLonInM(lat, lng, lastLoc.lat, lastLoc.lng);
-                 if (dist > 30) shouldSave = true; // 30 meters threshold
-             }
-
-             if (shouldSave) {
-                 WRITE_BUFFER.history.push({ id, lat, lng, battery, status });
-                 LAST_SAVED_LOCATIONS.set(id, { lat, lng });
-             }
-        }
+        await pool.query(
+          'UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, last_update=NOW() WHERE id=$5',
+          [lat, lng, battery, status, id]
+        );
+        await pool.query(
+          'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
+          [id, lat, lng, battery, status]
+        );
       }
-    } catch (e) {
-      console.error('Socket Message Error:', e);
-    }
+    } catch (e) {}
   });
 });
-
-const interval = setInterval(() => {
-  wss.clients.forEach(ws => {
-    if (ws.isAlive === false) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
-wss.on('close', () => clearInterval(interval));
 
 server.listen(PORT, () => {
     console.log(`🚀 FleetGuard Server running on port ${PORT}`);

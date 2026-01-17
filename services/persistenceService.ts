@@ -7,7 +7,6 @@ const API_KEY = "BDO_SECURE_NODE_99122";
 
 export const persistenceService = {
   
-  // Health Checks for Infrastructure Monitor
   checkNode01: async (): Promise<boolean> => {
     try {
         const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) });
@@ -27,58 +26,83 @@ export const persistenceService = {
     }
   },
 
+  getNeonStats: async () => {
+    try {
+        const res = await fetch(`${BACKEND_URL}/api/neon-stats?key=${API_KEY}`);
+        if (res.ok) return await res.json();
+        return null;
+    } catch (e) {
+        return null;
+    }
+  },
+
+  triggerCleanupAPI: async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/maintenance/cleanup?key=${API_KEY}`, {
+        method: 'POST'
+      });
+      return response.ok;
+    } catch (e) {
+      return false;
+    }
+  },
+
   fetchOfficersAPI: async (): Promise<SalesOfficer[]> => {
     const resultsMap = new Map<string, SalesOfficer>();
 
-    try {
-        // 1. Fetch from 'Super' (Supabase)
-        if (supabase) {
-            const { data: superData } = await supabase.from('officers').select('*');
-            if (superData) {
-                superData.forEach((o: any) => {
-                    const mappedOfficer: SalesOfficer = {
-                        ...o,
-                        lastUpdate: new Date(o.last_update || Date.now()),
-                        telemetrySource: 'SUPER_DB',
-                        leads: o.leads || [],
-                        history: [],
-                        evidence: [],
-                        tasks: o.tasks || []
-                    };
-                    resultsMap.set(o.id, mappedOfficer);
-                });
-            }
-        }
-
-        // 2. Fetch from 'New' (Render/Neon API)
-        const token = localStorage.getItem('bdo_auth_token');
-        const response = await fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (response.ok) {
-            const newData = await response.json();
-            newData.forEach((o: SalesOfficer) => {
-                const existing = resultsMap.get(o.id);
-                const currentUpdate = new Date(o.lastUpdate || 0);
-                if (!existing || currentUpdate > new Date(existing.lastUpdate)) {
-                    resultsMap.set(o.id, { 
-                        ...o, 
-                        telemetrySource: 'NEW_DB',
-                        lastUpdate: currentUpdate
+    const fetchTasks = [
+        (async () => {
+            if (!supabase) return;
+            try {
+                const { data } = await supabase.from('officers').select('*');
+                if (data) {
+                    data.forEach((o: any) => {
+                        resultsMap.set(o.id, {
+                            ...o,
+                            lastUpdate: new Date(o.last_update || o.lastUpdate || Date.now()),
+                            telemetrySource: 'SUPER_DB',
+                            leads: o.leads || [],
+                            history: [],
+                            evidence: [],
+                            tasks: o.tasks || []
+                        });
                     });
                 }
-            });
-        }
-    } catch (e) {
-        console.warn("Sync Node Warning:", e);
-    }
+            } catch (e) {}
+        })(),
+        (async () => {
+            try {
+                const token = localStorage.getItem('bdo_auth_token');
+                const response = await fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    const newData = await response.json();
+                    newData.forEach((o: any) => {
+                        const currentUpdate = new Date(o.last_update || o.lastUpdate || 0);
+                        const existing = resultsMap.get(o.id);
+                        if (!existing || currentUpdate >= new Date(existing.lastUpdate)) {
+                            resultsMap.set(o.id, { 
+                                ...o, 
+                                telemetrySource: 'NEW_DB',
+                                lastUpdate: currentUpdate,
+                                leads: o.leads || [], 
+                                history: [], 
+                                evidence: [], 
+                                tasks: o.tasks || []
+                            });
+                        }
+                    });
+                }
+            } catch (e) {}
+        })()
+    ];
 
+    await Promise.allSettled(fetchTasks);
     return Array.from(resultsMap.values());
   },
 
   login: async (id: string, password: string) => {
-    // 1. Attempt login against the New Database (Render Auth)
     try {
         const response = await fetch(`${BACKEND_URL}/api/login?key=${API_KEY}`, {
             method: 'POST',
@@ -86,79 +110,61 @@ export const persistenceService = {
             body: JSON.stringify({ id, password }),
             signal: AbortSignal.timeout(5000)
         });
-        
-        if (response.ok) {
-            return await response.json();
-        }
-    } catch (e) {
-        console.warn("Node 01 Auth Unreachable, failing over to Node 02...");
-    }
+        if (response.ok) return await response.json();
+    } catch (e) {}
 
-    // 2. Fallback to Super DB (Supabase)
-    if (supabase) {
-        try {
-            const { data: profile, error } = await supabase.from('officers').select('*').eq('id', id).single();
-            // In demo mode, if the user exists in Supabase, we allow '123' or 'admin' password
-            if (!error && profile && (password === '123' || password === 'admin' || password === profile.password)) {
-                return {
-                    token: 'fallback-token-node2',
-                    user: { ...profile, lastUpdate: new Date() }
-                };
-            }
-        } catch (e) {
-            console.warn("Node 02 Auth Failed.");
-        }
-    }
-
-    // 3. Last Resort: Hardcoded Developer Bypass (Ensures you are NEVER locked out)
     if (id === 'admin' && password === 'admin') {
          return { 
             token: 'dev-bypass-token', 
             user: { id: 'ADM-ROOT', name: 'Administrator (Bypass)', role: 'Admin' } 
          };
     }
-
-    throw new Error("Access Denied: Verification failed on all database nodes.");
+    throw new Error("Access Denied: Node verification failed.");
   },
 
   addOfficerAPI: async (officer: Partial<SalesOfficer>) => {
-     const promises = [];
+     const payload = {
+         ...officer,
+         lastUpdate: new Date().toISOString(),
+         status: 'Offline'
+     };
+
+     const token = localStorage.getItem('bdo_auth_token');
+     const promises = [
+         fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+             body: JSON.stringify(payload)
+         })
+     ];
+
      if (supabase) {
         promises.push(supabase.from('officers').upsert({
             id: officer.id,
             name: officer.name,
-            role: officer.role,
-            status: officer.status || 'Offline',
+            role: officer.role || 'Senior BDO',
+            status: 'Offline',
             last_update: new Date(),
-            password: officer.password || '123'
+            password: officer.password || '123',
+            leads: officer.leads || [],
+            tasks: []
         }));
      }
      
-     const token = localStorage.getItem('bdo_auth_token');
-     promises.push(fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-         body: JSON.stringify(officer)
-     }));
-
      await Promise.allSettled(promises);
   },
 
-  // Fix: Added missing deleteOfficerAPI method to handle personnel removal in the Admin Dashboard.
   deleteOfficerAPI: async (id: string) => {
-    const promises = [];
+    const token = localStorage.getItem('bdo_auth_token');
+    const promises = [
+        fetch(`${BACKEND_URL}/api/officers/${id}?key=${API_KEY}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+    ];
     if (supabase) {
       promises.push(supabase.from('officers').delete().eq('id', id));
     }
-    
-    const token = localStorage.getItem('bdo_auth_token');
-    promises.push(fetch(`${BACKEND_URL}/api/officers/${id}?key=${API_KEY}`, {
-      method: 'DELETE',
-      headers: { 
-        'Authorization': `Bearer ${token}` 
-      }
-    }));
-
     await Promise.allSettled(promises);
   },
 
@@ -167,18 +173,6 @@ export const persistenceService = {
           const { data } = await supabase.from('officers').select('tasks').eq('id', officerId).single();
           const currentTasks = data?.tasks || [];
           await supabase.from('officers').update({ tasks: [task, ...currentTasks] }).eq('id', officerId);
-      }
-  },
-
-  saveMessage: async (msg: Message) => {
-      if (supabase) {
-          await supabase.from('messages').insert({
-              text: msg.text,
-              sender_id: msg.senderId,
-              sender_name: msg.senderName,
-              is_from_admin: msg.isFromAdmin,
-              is_directive: msg.isDirective
-          });
       }
   }
 };

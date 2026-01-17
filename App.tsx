@@ -39,6 +39,7 @@ const App: React.FC = () => {
   const [officers, setOfficers] = useState<SalesOfficer[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isLoading, setIsLoading] = useState(false);
   
   // SYSTEM MODE: 'DEV' allows 24/7 access. 'PROD' enforces shift hours.
   const [systemMode, setSystemMode] = useState<'DEV' | 'PROD'>(
@@ -68,6 +69,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (user && isWithinShift) {
+        setIsLoading(true);
         const loadOfficers = async () => {
             try {
                 const data = await persistenceService.fetchOfficersAPI();
@@ -80,6 +82,8 @@ const App: React.FC = () => {
                 }
             } catch (e) {
                 console.error("[App] Unified Sync Error:", e);
+            } finally {
+                setIsLoading(false);
             }
         };
         loadOfficers();
@@ -176,17 +180,25 @@ const App: React.FC = () => {
                       The cluster is currently hibernating to preserve free trial credits. Weekends are inactive.
                   </p>
               </div>
-              <div className="mt-12 flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-slate-700"></div>
-                  <span className="text-[10px] font-mono text-slate-600 uppercase tracking-widest">Load Balancer: Idle</span>
-              </div>
           </div>
       );
   }
 
   if (!user) return <Login onLogin={handleLogin} />;
 
-  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || officers[0];
+  // Safely find current officer. Handle the case where the list isn't populated yet.
+  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || (officers.length > 0 ? officers[0] : null);
+
+  // If we're loading or if a BDO user doesn't have their profile ready yet, show loader
+  if (isLoading || (user.role === 'BDO' && !currentOfficer)) {
+    return (
+      <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-12">
+          <div className="w-16 h-16 border-4 border-[#FFD100] border-t-transparent rounded-full animate-spin mb-6"></div>
+          <h2 className="text-white font-black uppercase tracking-widest text-xs animate-pulse">Establishing Node Uplink...</h2>
+          <p className="text-slate-500 text-[9px] uppercase font-bold mt-2">Synchronizing Grid Personnel</p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-full bg-slate-50 overflow-hidden">
@@ -207,16 +219,18 @@ const App: React.FC = () => {
           onToggleSystemMode={toggleSystemMode}
         />
       ) : (
-        <BDOView 
-          user={user} 
-          officer={currentOfficer}
-          messages={[]}
-          onLogout={handleLogout}
-          onSendMessage={() => {}}
-          onReportIncident={() => {}}
-          wsStatus={wsStatus}
-          isOnline={isOnline}
-        />
+        currentOfficer && (
+          <BDOView 
+            user={user} 
+            officer={currentOfficer}
+            messages={[]}
+            onLogout={handleLogout}
+            onSendMessage={() => {}}
+            onReportIncident={() => {}}
+            wsStatus={wsStatus}
+            isOnline={isOnline}
+          />
+        )
       )}
     </div>
   );

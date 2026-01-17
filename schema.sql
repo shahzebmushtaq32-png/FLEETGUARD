@@ -32,6 +32,9 @@ CREATE TABLE public.location_history (
     timestamp timestamp with time zone DEFAULT timezone('utc'::text, now())
 );
 
+-- Index for Cleanup Performance
+CREATE INDEX idx_location_history_timestamp ON public.location_history (timestamp);
+
 -- 3. Create Messages Table
 CREATE TABLE public.messages (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -42,6 +45,8 @@ CREATE TABLE public.messages (
     is_directive boolean DEFAULT false,
     timestamp timestamp with time zone DEFAULT timezone('utc'::text, now())
 );
+
+CREATE INDEX idx_messages_timestamp ON public.messages (timestamp);
 
 -- 4. Create Incidents Table
 CREATE TABLE public.incidents (
@@ -55,6 +60,8 @@ CREATE TABLE public.incidents (
     timestamp timestamp with time zone DEFAULT timezone('utc'::text, now())
 );
 
+CREATE INDEX idx_incidents_timestamp ON public.incidents (timestamp);
+
 -- 5. Enable Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE public.officers;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
@@ -66,7 +73,7 @@ ALTER TABLE public.location_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.incidents ENABLE ROW LEVEL SECURITY;
 
--- Allow public access for this demo app (In prod, use 'authenticated')
+-- Allow public access for this demo app
 CREATE POLICY "Public Access Officers" ON public.officers FOR ALL USING (true);
 CREATE POLICY "Public Access History" ON public.location_history FOR ALL USING (true);
 CREATE POLICY "Public Access Messages" ON public.messages FOR ALL USING (true);
