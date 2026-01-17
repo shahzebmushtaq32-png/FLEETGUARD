@@ -39,25 +39,26 @@ const App: React.FC = () => {
   const [officers, setOfficers] = useState<SalesOfficer[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
+  // BYPASS ACTIVE: Set to true for development. Re-enable logic at the end of project.
   const [isWithinShift, setIsWithinShift] = useState(true);
 
-  // --- UPDATED TRIAL PROTECTION: Mon-Fri, 11:00 AM to 6:00 PM ---
   useEffect(() => {
     const checkShift = () => {
+        // --- LOGIC PRESERVED FOR END OF PROJECT ---
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
-        
-        // Monday (1) to Friday (5)
         const isWeekday = day >= 1 && day <= 5;
-        // 11:00 AM (11) to 6:00 PM (18)
         const inTimeWindow = hour >= 11 && hour < 18;
         
-        setIsWithinShift(isWeekday && inTimeWindow);
+        // FOR DEVELOPMENT: Always true. 
+        // To re-enable: change the line below to setIsWithinShift(isWeekday && inTimeWindow);
+        setIsWithinShift(true); 
     };
 
     checkShift();
-    const interval = setInterval(checkShift, 30000); // Check every 30 seconds for precision
+    const interval = setInterval(checkShift, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -197,6 +198,7 @@ const App: React.FC = () => {
     totalOnboarded: officers.reduce((acc, o) => acc + o.qrOnboarded, 0)
   };
 
+  // NOTE: This condition is bypassed for development via the setIsWithinShift(true) call above.
   if (!isWithinShift) {
       return (
           <div className="h-screen w-full flex flex-col items-center justify-center bg-[#001D3D] text-white p-12 text-center">

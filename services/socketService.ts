@@ -31,19 +31,15 @@ class SocketService {
         });
 
         this.channel
-            // Listen for Telemetry
             .on('broadcast', { event: 'telemetry' }, (payload: any) => {
                 if (this.onMessageCallback) this.onMessageCallback([payload.payload]);
             })
-            // Listen for Chats
             .on('broadcast', { event: 'chat' }, (payload: any) => {
                 if (this.onChatCallback) this.onChatCallback(payload.payload as Message);
             })
-            // Listen for Incidents
             .on('broadcast', { event: 'incident' }, (payload: any) => {
                 if (this.onIncidentCallback) this.onIncidentCallback(payload.payload as Incident);
             })
-            // Listen for DB Changes (Optional backup)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'officers' }, (payload: any) => {
                 if (payload.new && this.onMessageCallback) {
                     this.onMessageCallback([payload.new as Partial<SalesOfficer>]);
@@ -74,7 +70,10 @@ class SocketService {
 
   private updateStatus(newStatus: ConnectionStatus) {
     this.status = newStatus;
-    if (this.onStatusChangeCallback) this.onStatusChangeCallback(newStatus);
+    if (this.onStatusChangeCallback) {
+        // Debounce or ensure state consistency
+        this.onStatusChangeCallback(newStatus);
+    }
   }
 
   onDeviceUpdate(callback: (officers: Partial<SalesOfficer>[]) => void) {
@@ -90,7 +89,7 @@ class SocketService {
   }
 
   async sendTelemetry(officer: Partial<SalesOfficer>) {
-    if (!this.channel) return;
+    if (!this.channel || this.status !== 'Broadcasting_Live') return;
     await this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer });
   }
 
@@ -102,10 +101,6 @@ class SocketService {
   async sendIncident(incident: Incident) {
       if (!this.channel) return;
       await this.channel.send({ type: 'broadcast', event: 'incident', payload: incident });
-  }
-
-  getWsUrl() {
-      return supabase ? "Supabase Realtime Cloud" : "Local Mode (Offline)";
   }
 }
 
