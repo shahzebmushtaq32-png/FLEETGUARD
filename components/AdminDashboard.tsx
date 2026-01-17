@@ -109,7 +109,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="flex flex-1 overflow-hidden relative">
         <nav className="w-20 bg-[#1e293b] border-r border-white/5 flex flex-col items-center py-6 gap-6 z-30 shadow-2xl">
             <NavIcon active={activeTab === 'map'} onClick={() => setActiveTab('map')} icon="map" label="Map" />
-            <NavIcon active={activeTab === 'dispatch'} onClick={() => setActiveTab('dispatch'} icon="cpu" label="AI Hub" />
+            <NavIcon active={activeTab === 'dispatch'} onClick={() => setActiveTab('dispatch')} icon="cpu" label="AI Hub" />
             <NavIcon active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} icon="shield" label="Audit" />
             <NavIcon active={activeTab === 'ops'} onClick={() => setActiveTab('ops')} icon="settings" label="Ops" />
         </nav>
