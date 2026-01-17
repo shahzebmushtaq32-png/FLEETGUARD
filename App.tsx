@@ -40,27 +40,31 @@ const App: React.FC = () => {
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
-  // BYPASS ACTIVE: Set to true for development. Re-enable logic at the end of project.
+  // SYSTEM MODE: 'DEV' allows 24/7 access. 'PROD' enforces shift hours.
+  const [systemMode, setSystemMode] = useState<'DEV' | 'PROD'>(
+    (localStorage.getItem('bdo_system_mode') as 'DEV' | 'PROD') || 'DEV'
+  );
   const [isWithinShift, setIsWithinShift] = useState(true);
 
   useEffect(() => {
     const checkShift = () => {
-        // --- LOGIC PRESERVED FOR END OF PROJECT ---
+        if (systemMode === 'DEV') {
+          setIsWithinShift(true);
+          return;
+        }
+
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
         const isWeekday = day >= 1 && day <= 5;
         const inTimeWindow = hour >= 11 && hour < 18;
-        
-        // FOR DEVELOPMENT: Always true. 
-        // To re-enable: change the line below to setIsWithinShift(isWeekday && inTimeWindow);
-        setIsWithinShift(true); 
+        setIsWithinShift(isWeekday && inTimeWindow); 
     };
 
     checkShift();
-    const interval = setInterval(checkShift, 30000);
+    const interval = setInterval(checkShift, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [systemMode]);
 
   useEffect(() => {
     if (user && isWithinShift) {
@@ -123,6 +127,12 @@ const App: React.FC = () => {
     }
   }, [user, isWithinShift]);
 
+  const toggleSystemMode = () => {
+    const newMode = systemMode === 'DEV' ? 'PROD' : 'DEV';
+    setSystemMode(newMode);
+    localStorage.setItem('bdo_system_mode', newMode);
+  };
+
   const handleLogin = (username: string, role: UserRole, officerId?: string) => {
     setUser({
       id: role === 'Admin' ? 'ADM-ROOT' : (officerId || 'OFC-001'),
@@ -138,54 +148,6 @@ const App: React.FC = () => {
     socketService.disconnect();
   };
 
-  const handleAddBDO = async (name: string, code: string, password: string, avatar: string) => {
-    const newBdo: SalesOfficer = {
-      ...INITIAL_OFFICER_TEMPLATE,
-      id: code,
-      name,
-      password,
-      status: 'Offline',
-      avatar: avatar || undefined
-    };
-    setOfficers(prev => [...prev, newBdo]);
-    await persistenceService.addOfficerAPI(newBdo);
-  };
-
-  const handleDeleteBDO = async (id: string) => {
-    setOfficers(prev => prev.filter(o => o.id !== id));
-    await persistenceService.deleteOfficerAPI(id);
-  };
-
-  const handleAssignTask = async (officerId: string, taskTitle: string) => {
-      const newTask: DeploymentTask = {
-          id: `TASK-${Date.now()}`,
-          title: taskTitle,
-          description: 'Priority directive from HQ',
-          status: 'Pending',
-          createdAt: new Date()
-      };
-      
-      setOfficers(prev => prev.map(o => {
-          if (o.id === officerId) {
-              return { ...o, tasks: [newTask, ...o.tasks] };
-          }
-          return o;
-      }));
-
-      await persistenceService.assignTaskAPI(officerId, newTask);
-      
-      socketService.sendChat({
-          id: Date.now().toString(),
-          text: `New Directive: ${taskTitle}`,
-          senderId: 'ADM-ROOT',
-          senderName: 'HQ',
-          isFromAdmin: true,
-          isDirective: true,
-          timestamp: new Date(),
-          isEncrypted: false
-      });
-  };
-
   const stats: SystemStats = {
     totalPipeline: officers.reduce((acc, o) => acc + o.pipelineValue, 0),
     activeMeetings: officers.filter(o => o.status === 'Meeting').length,
@@ -198,7 +160,6 @@ const App: React.FC = () => {
     totalOnboarded: officers.reduce((acc, o) => acc + o.qrOnboarded, 0)
   };
 
-  // NOTE: This condition is bypassed for development via the setIsWithinShift(true) call above.
   if (!isWithinShift) {
       return (
           <div className="h-screen w-full flex flex-col items-center justify-center bg-[#001D3D] text-white p-12 text-center">
@@ -237,11 +198,13 @@ const App: React.FC = () => {
           stats={stats}
           messages={[]}
           onLogout={handleLogout}
-          onAddBDO={handleAddBDO}
-          onDeleteBDO={handleDeleteBDO}
-          onAssignTask={handleAssignTask}
+          onAddBDO={(n, c, p, a) => persistenceService.addOfficerAPI({ id: c, name: n, password: p, avatar: a })}
+          onDeleteBDO={(id) => persistenceService.deleteOfficerAPI(id)}
+          onAssignTask={(id, title) => persistenceService.assignTaskAPI(id, { id: Date.now().toString(), title, status: 'Pending', createdAt: new Date() })}
           onSendMessage={() => {}}
           wsStatus={wsStatus}
+          systemMode={systemMode}
+          onToggleSystemMode={toggleSystemMode}
         />
       ) : (
         <BDOView 

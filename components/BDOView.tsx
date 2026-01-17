@@ -33,7 +33,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isVerified, setIsVerified] = useState(!!officer?.avatar);
-  const [notification, setNotification] = useState<{title: string, msg: string} | null>(null);
+  const [latency, setLatency] = useState(45); // Simulated latency
   
   // Shift Timer State (8 Hours in seconds)
   const [shiftTimeRemaining, setShiftTimeRemaining] = useState(8 * 60 * 60);
@@ -41,7 +41,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
   // PROTOCOL DELTA: Security State
   const [isSecurityLocked, setIsSecurityLocked] = useState(false);
   const securityTimerRef = useRef<any>(null);
-  const [securityCountdown, setSecurityCountdown] = useState(120); 
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -50,6 +49,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
   useEffect(() => {
     const timer = setInterval(() => {
         setShiftTimeRemaining(prev => Math.max(0, prev - 1));
+        setLatency(Math.floor(Math.random() * 30) + 30);
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -64,24 +64,14 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
   useEffect(() => {
     const hasPassedProtocol = sessionStorage.getItem('bdo_protocol_delta_passed');
     if (!hasPassedProtocol) {
-        securityTimerRef.current = setInterval(() => {
-            setSecurityCountdown(prev => {
-                if (prev <= 1) {
-                    clearInterval(securityTimerRef.current);
-                    setIsSecurityLocked(true);
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
+        setIsSecurityLocked(true);
     }
-    return () => clearInterval(securityTimerRef.current);
   }, []);
 
   useEffect(() => {
     if (!officer) return;
     let watchId: number;
-    let batteryLevel = officer.battery || 100;
+    let batteryLevel = 100;
 
     const initBattery = async () => {
         const nav = navigator as NavigatorWithBattery;
@@ -89,9 +79,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
             try {
                 const battery = await nav.getBattery();
                 batteryLevel = Math.round(battery.level * 100);
-                battery.addEventListener('levelchange', () => {
-                    batteryLevel = Math.round(battery.level * 100);
-                });
             } catch (e) {}
         }
     };
@@ -170,32 +157,45 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
        {/* Live Telemetry Bar */}
        <div className="bg-[#001D3D] px-6 py-2 flex items-center justify-between border-b border-white/5">
            <div className="flex items-center gap-2">
-               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
-               <span className="text-[7px] font-black text-emerald-400 uppercase tracking-widest">Live Uplink Active</span>
+               <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
+               <span className={`text-[7px] font-black uppercase tracking-widest ${isOnline ? 'text-emerald-400' : 'text-red-400'}`}>
+                 {isOnline ? 'Live Uplink Active' : 'Uplink Failed'}
+               </span>
            </div>
            <div className="flex gap-4">
-                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">WS: {wsStatus === 'Broadcasting_Live' ? 'CONNECTED' : 'RECONNECTING'}</span>
-                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">GPS: {isOnline ? 'TRACKING' : 'OFFLINE'}</span>
+                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">Lat: {latency}ms</span>
+                <span className="text-[7px] font-mono text-slate-500 uppercase tracking-widest">WS: {wsStatus === 'Broadcasting_Live' ? 'LIVE' : 'SYNC'}</span>
            </div>
        </div>
 
        {isSecurityLocked && (
-           <div className="absolute inset-0 z-[100] bg-[#001D3D] flex flex-col items-center justify-center p-6 animate-in fade-in duration-500">
+           <div className="absolute inset-0 z-[100] bg-[#001D3D] flex flex-col items-center justify-center p-6">
                <div className="w-full max-w-sm bg-white rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden text-center">
-                    <div className="w-16 h-1 bg-red-600 mx-auto rounded-full mb-6"></div>
                     <h2 className="text-xl font-black text-[#003366] uppercase tracking-tight mb-2">Protocol Delta</h2>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-6">Periodic Identity Verification Required</p>
-                    <div className="relative rounded-3xl overflow-hidden aspect-square bg-slate-900 mb-8 border-4 border-slate-50 shadow-inner">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-6">Security Authorization Required</p>
+                    
+                    <div className="relative rounded-3xl overflow-hidden aspect-square bg-slate-900 mb-8 border-4 border-slate-50 shadow-inner group">
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                         <canvas ref={canvasRef} className="hidden" />
-                        <div className="absolute inset-0 border-2 border-white/20 pointer-events-none"></div>
+                        
+                        {/* Face Guide Overlay */}
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-40">
+                             <div className="w-48 h-64 border-2 border-dashed border-cyan-400 rounded-[6rem] flex items-center justify-center">
+                                 <div className="w-4 h-4 border-t-2 border-l-2 border-cyan-400 absolute top-12"></div>
+                                 <div className="w-4 h-4 border-t-2 border-r-2 border-cyan-400 absolute top-12 right-12"></div>
+                             </div>
+                        </div>
+                        <div className="absolute bottom-4 left-0 right-0 text-center">
+                            <span className="text-[8px] font-black text-cyan-400 uppercase tracking-widest bg-black/40 px-2 py-1 rounded">Align face for scan</span>
+                        </div>
                     </div>
+
                     <button 
                         onClick={() => handleCapture(true)}
                         disabled={isCapturing}
                         className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-2xl uppercase text-[11px] tracking-[0.2em] shadow-lg active:scale-95 transition-all disabled:opacity-50"
                     >
-                        {isCapturing ? 'Verifying...' : 'Authorize Access'}
+                        {isCapturing ? 'Verifying Identity...' : 'Authorize Access'}
                     </button>
                </div>
            </div>
@@ -240,9 +240,9 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
        <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
            {activeTab === 'home' && (
                <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-bottom-4 duration-500">
-                   <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 group hover:shadow-xl transition-all">
+                   <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Today's Visits</p>
-                       <p className="text-5xl font-black text-[#003366] tracking-tighter group-hover:scale-110 transition-transform origin-left">{officer.visitCount}</p>
+                       <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount}</p>
                    </div>
                    <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col items-center">
                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-3">Quota Reach</p>
@@ -269,16 +269,15 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, onReportInc
            {activeTab === 'leads' && (
                <div className="space-y-4 animate-in slide-in-from-bottom-4 duration-500">
                    {officer.leads.map(lead => (
-                       <div key={lead.id} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between group hover:border-[#FFD100] transition-colors">
+                       <div key={lead.id} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between group">
                            <div>
                                <h4 className="text-sm font-black text-[#003366] uppercase tracking-tight mb-1">{lead.clientName}</h4>
                                <div className="flex items-center gap-2">
                                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{lead.stage}</span>
-                                    <div className="w-1 h-1 bg-slate-200 rounded-full"></div>
                                     <span className="text-[8px] font-black text-cyan-600 uppercase tracking-widest">₱{(lead.value/1000).toFixed(0)}K</span>
                                </div>
                            </div>
-                           <button className="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 group-hover:bg-[#FFD100] group-hover:text-[#003366] flex items-center justify-center transition-all">
+                           <button className="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 hover:bg-[#FFD100] hover:text-[#003366] flex items-center justify-center transition-all">
                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                            </button>
                        </div>
