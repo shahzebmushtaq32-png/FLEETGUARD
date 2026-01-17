@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 
+// Initialize AI with the environment variable as per requirements
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const verifyBdoIdentity = async (base64Image: string) => {
@@ -27,7 +28,9 @@ export const verifyBdoIdentity = async (base64Image: string) => {
       }
     });
 
-    return JSON.parse(response.text || '{}');
+    // Access .text property directly (not a method)
+    const text = response.text || '{}';
+    return JSON.parse(text);
   } catch (error) {
     console.error("Gemini Verification Error:", error);
     return { verified: true, confidence: 100, welcomeMessage: "Manual Override Active" };
@@ -59,7 +62,8 @@ export const getDispatchRecommendations = async (officers: any[], leads: any[]) 
       }
     });
 
-    return JSON.parse(response.text || '[]');
+    const text = response.text || '[]';
+    return JSON.parse(text);
   } catch (error) {
     console.error("Gemini Dispatch Error:", error);
     return [];
@@ -86,7 +90,8 @@ export const analyzeReportSentiment = async (report: any) => {
       }
     });
 
-    return JSON.parse(response.text || '{"sentiment": "N/A", "riskLevel": "Low", "summary": "Analysis Error"}');
+    const text = response.text || '{"sentiment": "N/A", "riskLevel": "Low", "summary": "Analysis Error"}';
+    return JSON.parse(text);
   } catch (error) {
     return { sentiment: 'N/A', riskLevel: 'Low', summary: 'Analysis Disabled' };
   }

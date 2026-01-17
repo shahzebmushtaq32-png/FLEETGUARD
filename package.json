@@ -1,3 +1,4 @@
+
 {
   "name": "bdo-fleet-unified",
   "private": true,
@@ -11,6 +12,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@google/genai": "^1.37.0",
     "@supabase/supabase-js": "^2.39.0",
     "@aws-sdk/client-s3": "^3.600.0",
     "@aws-sdk/s3-request-presigner": "^3.600.0",
