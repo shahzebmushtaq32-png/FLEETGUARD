@@ -11,7 +11,6 @@ const { Pool } = pg;
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; 
 
 // SECURITY KEYS
 const WS_API_KEY = process.env.WS_API_KEY || "BDO_SECURE_NODE_99122"; 
@@ -20,19 +19,14 @@ const JWT_SECRET = process.env.JWT_SECRET || "8c22a07b5ae723637fb9b41cdc81a47521
 // --- DATABASE CONFIGURATION ---
 const getDbUrl = () => {
   let url = process.env.NEON_DATABASE_URL || "postgresql://neondb_owner:npg_bzq8XLNUV6YG@ep-tiny-king-ahricq41-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require";
-  
-  // Clean 'psql' wrapper if present
   if (url.includes("'")) {
     const match = url.match(/'([^']+)'/);
     if (match) url = match[1];
   }
-  
-  // Strip redundant params that cause SSL issues in some environments
   return url.split('?')[0] + '?sslmode=require';
 };
 
 const dbUrl = getDbUrl();
-
 const pool = new Pool({
   connectionString: dbUrl,
   ssl: { rejectUnauthorized: false },
@@ -75,7 +69,6 @@ const authenticateToken = (req, res, next) => {
 
   if (!token) return res.status(401).json({ error: 'Token Missing' });
 
-  // Allow bypass token for development mode only if API key is present
   if (token === 'dev-bypass-token') {
     req.user = { id: 'ADM-ROOT', role: 'Admin', name: 'Dev Bypass' };
     return next();
@@ -120,13 +113,11 @@ const initDB = async () => {
 
     const countRes = await pool.query('SELECT COUNT(*) FROM officers');
     if (parseInt(countRes.rows[0].count) === 0) {
-      console.log("🌱 Seeding production root nodes...");
       await pool.query(
         "INSERT INTO officers (id, name, password, role) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)",
         ['ADM-ROOT', 'System Administrator', 'admin', 'Admin', 'n1', 'James Wilson', '12345', 'Senior BDO']
       );
     }
-    console.log("✅ Neon DB Initialized Successfully");
   } catch (err) {
     console.error("❌ Database init error:", err.message);
   }
@@ -136,6 +127,20 @@ initDB();
 
 // --- ROUTES ---
 app.get('/health', (req, res) => res.status(200).send('FleetGuard Online'));
+
+app.get('/api/neon-stats', requireApiKey, async (req, res) => {
+  try {
+    const nodeCount = await pool.query('SELECT COUNT(*) FROM officers');
+    const historyCount = await pool.query('SELECT COUNT(*) FROM location_history');
+    res.json({ 
+      activeNodes: parseInt(nodeCount.rows[0].count), 
+      telemetryPoints: parseInt(historyCount.rows[0].count),
+      status: 'CONNECTED' 
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'ERROR', message: err.message });
+  }
+});
 
 app.get('/api/r2-health', requireApiKey, async (req, res) => {
   try {
@@ -173,10 +178,11 @@ app.get('/api/officers', authenticateToken, async (req, res) => {
 
 app.post('/api/officers', authenticateToken, async (req, res) => {
   const { id, name, password, role, avatar } = req.body;
+  if (!id || !name) return res.status(400).json({ error: 'ID and Name are required' });
   try {
     await pool.query(
       'INSERT INTO officers (id, name, password, role, avatar) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name=$2, password=$3, role=$4, avatar=$5',
-      [id, name, password, role, avatar]
+      [id, name, password || '123', role || 'BDO', avatar || '']
     );
     res.json({ success: true });
   } catch (err) {
@@ -226,12 +232,10 @@ wss.on('connection', (ws) => {
       if (data.type === 'TELEMETRY') {
         const { id, lat, lng, battery, status, avatar } = data.payload;
         broadcast([data.payload]);
-        
         await pool.query(
           'UPDATE officers SET lat=$1, lng=$2, battery=$3, status=$4, avatar=COALESCE($5, avatar), last_update=NOW() WHERE id=$6',
           [lat, lng, battery, status, avatar, id]
         );
-
         await pool.query(
           'INSERT INTO location_history (node_id, lat, lng, battery, status) VALUES ($1, $2, $3, $4, $5)',
           [id, lat, lng, battery, status]

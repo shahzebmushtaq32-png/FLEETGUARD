@@ -20,8 +20,7 @@ export const persistenceService = {
     if (!supabase) return false;
     try {
         const { data, error } = await supabase.from('officers').select('id').limit(1);
-        if (error) return false;
-        return true;
+        return !error;
     } catch (e) {
         return false;
     }
@@ -126,7 +125,6 @@ export const persistenceService = {
         console.warn("[Persistence] Backend login failed, checking bypass...");
     }
 
-    // AUTH BYPASS FOR LOCAL/DEV DEMO - Aligned with Supabase Seed (ADM-ROOT)
     if ((id === 'admin' || id === 'ADM-ROOT') && (password === 'admin' || password === '123')) {
          return { 
             token: 'dev-bypass-token', 
@@ -161,8 +159,10 @@ export const persistenceService = {
 
   addOfficerAPI: async (officer: Partial<SalesOfficer>) => {
      console.log("[Persistence] Initiating Node Deployment for:", officer.id);
+     const role = officer.role || 'Senior BDO';
      const payload = {
          ...officer,
+         role: role,
          lastUpdate: new Date().toISOString(),
          status: 'Offline'
      };
@@ -194,12 +194,12 @@ export const persistenceService = {
         supabaseTask = supabase.from('officers').upsert({
             id: officer.id,
             name: officer.name,
-            role: officer.role || 'Senior BDO',
+            role: role,
             avatar: officer.avatar || '',
             status: 'Offline',
             last_update: new Date(),
             password: officer.password || '123',
-            leads: officer.leads || [],
+            leads: [],
             tasks: []
         }).then(res => {
           if (res.error) {
