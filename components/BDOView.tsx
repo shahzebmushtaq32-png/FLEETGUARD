@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { User, SalesOfficer, Incident, Message, DeploymentTask, EvidenceAsset, SalesLead } from '../types';
+import { User, SalesOfficer, Incident, Message } from '../types';
 import { socketService } from '../services/socketService';
 import { r2Service } from '../services/r2Service';
 import { verifyBdoIdentity } from '../services/geminiService';
@@ -22,7 +22,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const [activeTab, setActiveTab] = useState<'home' | 'leads' | 'jobs' | 'selfie'>('home');
   const [currentStatus, setCurrentStatus] = useState<SalesOfficer['status']>(officer?.status || 'Offline');
   
-  // SYNC SOURCE OF TRUTH: Local state for immediate feedback, but synced with props
+  // Local state for immediate UI feedback
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [realBattery, setRealBattery] = useState<number>(officer?.battery || 100);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -33,27 +33,25 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Hardware Permissions State
   const [permStatus, setPermStatus] = useState({
     cam: 'pending',
     geo: 'pending',
     mock: 'pending'
   });
 
-  // Keep local photo state in sync with incoming prop updates from App.tsx
+  // Sync with prop updates from server/parent
   useEffect(() => {
     if (officer?.avatar && officer.avatar !== capturedPhoto) {
       setCapturedPhoto(officer.avatar);
     }
   }, [officer?.avatar]);
 
-  // --- REFINED TELEMETRY SENDER ---
+  // Memoized broadcast to avoid stale closures
   const broadcastTelemetry = useCallback((customPayload?: Partial<SalesOfficer>) => {
     if (!officer || isSecurityLocked) return;
 
     navigator.geolocation.getCurrentPosition((pos) => {
-      // Use latest state: capturedPhoto for local priority, officer.avatar as fallback
-      const activeAvatar = capturedPhoto || officer.avatar;
+      const activeAvatar = customPayload?.avatar || capturedPhoto || officer.avatar;
       
       const telemetry = {
         id: officer.id,
@@ -70,9 +68,9 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     }, undefined, { enableHighAccuracy: true });
   }, [officer, isSecurityLocked, realBattery, currentStatus, capturedPhoto]);
 
-  // --- HARDWARE ENROLLMENT ---
   useEffect(() => {
     const initHardware = async () => {
+      // Camera check
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
         stream.getTracks().forEach(t => t.stop());
@@ -81,6 +79,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
         setPermStatus(p => ({ ...p, cam: 'fail' }));
       }
 
+      // Geo check
       if ("geolocation" in navigator) {
         navigator.geolocation.getCurrentPosition(
           (pos) => {
@@ -95,6 +94,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
         setPermStatus(p => ({ ...p, geo: 'fail' }));
       }
 
+      // Hardware Battery Link
       if ('getBattery' in navigator) {
         const battery: any = await (navigator as any).getBattery();
         const updateBatt = () => setRealBattery(Math.round(battery.level * 100));
@@ -106,19 +106,12 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     initHardware();
   }, []);
 
-  // Sync state changes to grid immediately
+  // Immediate sync on status/battery change
   useEffect(() => {
     if (!isSecurityLocked) broadcastTelemetry();
   }, [currentStatus, realBattery, isSecurityLocked, broadcastTelemetry]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!isSecurityLocked) broadcastTelemetry();
-    }, 20000);
-    return () => clearInterval(interval);
-  }, [isSecurityLocked, broadcastTelemetry]);
-
-  // --- CAMERA MANAGEMENT ---
+  // Camera handling for Biometrics/Selfie
   useEffect(() => {
     if (isSecurityLocked || activeTab === 'selfie') {
       const startCamera = async () => {
@@ -142,7 +135,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     }
   }, [isSecurityLocked, activeTab]);
 
-  // --- IDENTITY VERIFICATION ---
   const handleAuth = async () => {
     if (!videoRef.current || !canvasRef.current || !officer) {
       setSecurityError("Hardware not ready.");
@@ -165,7 +157,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       try {
           const aiResult = await verifyBdoIdentity(imageData);
           if (aiResult.verified) {
-              // BUST CACHE: Unique filename per session check
               const uniqueFileName = `auth_${officer.id}_${Date.now()}.jpg`;
               const url = await r2Service.uploadEvidence(imageData, uniqueFileName);
               
@@ -176,7 +167,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
               setCurrentStatus('Active');
               sessionStorage.setItem('bdo_session_secure', 'true');
               
-              // BROADCAST SYNC: Explicitly include the new avatar URL
+              // Direct broadcast with the fresh URL
               broadcastTelemetry({ avatar: url, status: 'Active' });
           } else {
               setSecurityError(aiResult.welcomeMessage || "Identity sync failed.");
@@ -199,7 +190,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     return (
       <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-12 text-center text-white">
         <h1 className="text-2xl font-black uppercase tracking-widest mb-4">Hardware Blocked</h1>
-        <p className="text-slate-400 text-xs mb-10">Identity verification requires active optics and geo-link.</p>
         <button onClick={() => window.location.reload()} className="bg-[#FFD100] text-[#003366] px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl">Re-Authenticate</button>
       </div>
     );
@@ -213,14 +203,11 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
             <div className="w-12 h-1.5 bg-[#FFD100] mx-auto rounded-full mb-10"></div>
             <h2 className="text-2xl font-black text-[#003366] uppercase tracking-tight mb-2">Gate 01 Check</h2>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Synchronizing Identity</p>
-            
             <div className="relative rounded-[2.5rem] overflow-hidden aspect-square bg-[#001D3D] mb-8 border-[6px] border-slate-50 shadow-inner">
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                 <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-cyan-400 shadow-[0_0_15px_cyan] animate-[scan_3s_infinite]"></div>
             </div>
-
             {securityError && <div className="mb-6 bg-red-50 p-4 rounded-2xl"><p className="text-[9px] font-black text-red-600 uppercase leading-tight">{securityError}</p></div>}
-
             <button onClick={handleAuth} disabled={isCapturing} className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] tracking-[0.2em] shadow-xl disabled:opacity-50">
                 {isCapturing ? 'Validating...' : 'Authenticate Node'}
             </button>
@@ -234,11 +221,10 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   return (
     <div className="h-full flex flex-col bg-[#f8fafc] font-sans relative overflow-hidden">
        <canvas ref={canvasRef} className="hidden" />
-       
        <div className="bg-[#001D3D] px-6 py-3 flex items-center justify-between">
            <div className="flex items-center gap-3">
                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-               <span className="text-[8px] font-black text-white/50 uppercase tracking-[0.2em]">ENCRYPTED_NODE: {officer.id}</span>
+               <span className="text-[8px] font-black text-white/50 uppercase tracking-[0.2em]">NODE: {officer.id}</span>
            </div>
            <span className="text-[8px] font-black text-white/50 uppercase">Grid Status: {wsStatus}</span>
        </div>
@@ -247,7 +233,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
           <div className="flex justify-between items-start mb-10">
              <div className="flex gap-5 items-center">
                 <div className="w-16 h-16 bg-white rounded-[1.75rem] overflow-hidden border-4 border-white/20 shadow-2xl p-0.5">
-                    {/* BUST CACHE: Using capturedPhoto ensures we show the latest biometric capture immediately */}
                     <img key={capturedPhoto} src={capturedPhoto || officer.avatar || 'https://via.placeholder.com/150'} className="w-full h-full object-cover rounded-[1.5rem]" />
                 </div>
                 <div>
@@ -259,7 +244,6 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
              </button>
           </div>
-
           <div className="flex bg-[#002855] p-2 rounded-[2.25rem] border border-white/5 shadow-inner">
                 {['Active', 'Break', 'Offline'].map(status => (
                     <button 
@@ -277,7 +261,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
            <div className="grid grid-cols-2 gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
                <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
                    <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Unit Load</p>
-                   <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount}</p>
+                   <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount || 0}</p>
                </div>
                <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
                    <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Power Status</p>
@@ -287,7 +271,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                    <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFD100]/10 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700"></div>
                    <div className="relative z-10">
                        <h4 className="text-[10px] font-black text-slate-400 uppercase mb-1">Pipeline Volume</h4>
-                       <p className="text-3xl font-black text-[#003366]">₱{(officer.pipelineValue/1000000).toFixed(1)}M</p>
+                       <p className="text-3xl font-black text-[#003366]">₱{((officer.pipelineValue || 0)/1000000).toFixed(1)}M</p>
                    </div>
                    <GeminiLiveVoice />
                </div>

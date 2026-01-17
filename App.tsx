@@ -7,31 +7,25 @@ import { BDOView } from './components/BDOView';
 import { persistenceService } from './services/persistenceService';
 import { socketService } from './services/socketService';
 
-const MOCK_OFFICER_LEADS: SalesLead[] = [
-  { id: 'LD-1', clientName: 'SM Hypermarket Makati', value: 5000000, stage: 'Closing', probability: 0.9, qrStatus: 'Active', currentMonthVolume: 2450000, lastTxDate: new Date(), reports: [] },
-  { id: 'LD-2', clientName: 'Mercury Drug Ayala', value: 2000000, stage: 'Meeting', probability: 0.7, qrStatus: 'Onboarded_Inactive', currentMonthVolume: 0, lastTxDate: undefined, reports: [] },
-  { id: 'LD-3', clientName: 'Puregold Qi Central', value: 1500000, stage: 'Proposal', probability: 0.5, qrStatus: 'Prospect', currentMonthVolume: 0, lastTxDate: undefined, reports: [] },
-];
-
+// Removed static mock leads to ensure data integrity from DB
 const INITIAL_OFFICER_TEMPLATE: SalesOfficer = { 
-    id: 'n1',
-    name: 'James Wilson',
-    password: '12345', 
+    id: 'unknown',
+    name: 'Syncing...',
     lat: 14.5547, lng: 121.0244, 
-    battery: 85, signalStrength: 92, networkType: '5G',
-    status: 'Active', lastUpdate: new Date(), 
+    battery: 100, signalStrength: 100, networkType: '5G',
+    status: 'Offline', lastUpdate: new Date(), 
     role: 'Senior BDO', 
-    leads: MOCK_OFFICER_LEADS, 
+    leads: [], 
     history: [], 
-    pipelineValue: 4500000, 
-    visitCount: 12, 
-    quotaProgress: 78,
-    qrOnboarded: 45,
-    qrActivated: 38,
-    qrVolume: 12500000,
+    pipelineValue: 0, 
+    visitCount: 0, 
+    quotaProgress: 0,
+    qrOnboarded: 0,
+    qrActivated: 0,
+    qrVolume: 0,
     evidence: [],
     tasks: [],
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?ixlib=rb-1.2.1&auto=format&fit=crop&w=150&q=80'
+    avatar: ''
 };
 
 const App: React.FC = () => {
@@ -41,7 +35,6 @@ const App: React.FC = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isLoading, setIsLoading] = useState(false);
   
-  // SYSTEM MODE: 'DEV' allows 24/7 access. 'PROD' enforces shift hours.
   const [systemMode, setSystemMode] = useState<'DEV' | 'PROD'>(
     (localStorage.getItem('bdo_system_mode') as 'DEV' | 'PROD') || 'DEV'
   );
@@ -53,7 +46,6 @@ const App: React.FC = () => {
           setIsWithinShift(true);
           return;
         }
-
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
@@ -148,20 +140,21 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setUser(null);
+    localStorage.removeItem('bdo_auth_token');
     localStorage.removeItem('bdo_user_session');
     socketService.disconnect();
   };
 
   const stats: SystemStats = {
-    totalPipeline: officers.reduce((acc, o) => acc + o.pipelineValue, 0),
+    totalPipeline: officers.reduce((acc, o) => acc + (o.pipelineValue || 0), 0),
     activeMeetings: officers.filter(o => o.status === 'Meeting').length,
-    dailyVisits: officers.reduce((acc, o) => acc + o.visitCount, 0),
+    dailyVisits: officers.reduce((acc, o) => acc + (o.visitCount || 0), 0),
     teamPerformance: 85,
     onlineCount: officers.filter(o => o.status !== 'Offline').length,
     criticalBattery: officers.filter(o => o.battery < 20).length,
     saturationLevel: 45,
-    totalQrVolume: officers.reduce((acc, o) => acc + o.qrVolume, 0),
-    totalOnboarded: officers.reduce((acc, o) => acc + o.qrOnboarded, 0)
+    totalQrVolume: officers.reduce((acc, o) => acc + (o.qrVolume || 0), 0),
+    totalOnboarded: officers.reduce((acc, o) => acc + (o.qrOnboarded || 0), 0)
   };
 
   if (!isWithinShift) {
@@ -176,9 +169,6 @@ const App: React.FC = () => {
                       Operational Hours:<br/>
                       <span className="text-amber-400">MON-FRI | 11:00 AM - 06:00 PM</span>
                   </p>
-                  <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">
-                      The cluster is currently hibernating to preserve free trial credits. Weekends are inactive.
-                  </p>
               </div>
           </div>
       );
@@ -186,16 +176,13 @@ const App: React.FC = () => {
 
   if (!user) return <Login onLogin={handleLogin} />;
 
-  // Safely find current officer. Handle the case where the list isn't populated yet.
-  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || (officers.length > 0 ? officers[0] : null);
+  const currentOfficer = officers.find(o => o.id === user.assignedOfficerId) || (user.role === 'BDO' ? officers.find(o => o.id === user.assignedOfficerId) : null);
 
-  // If we're loading or if a BDO user doesn't have their profile ready yet, show loader
   if (isLoading || (user.role === 'BDO' && !currentOfficer)) {
     return (
       <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-12">
           <div className="w-16 h-16 border-4 border-[#FFD100] border-t-transparent rounded-full animate-spin mb-6"></div>
           <h2 className="text-white font-black uppercase tracking-widest text-xs animate-pulse">Establishing Node Uplink...</h2>
-          <p className="text-slate-500 text-[9px] uppercase font-bold mt-2">Synchronizing Grid Personnel</p>
       </div>
     );
   }

@@ -20,7 +20,8 @@ export const persistenceService = {
     if (!supabase) return false;
     try {
         const { data, error } = await supabase.from('officers').select('id').limit(1);
-        return !error;
+        if (error) return false;
+        return true;
     } catch (e) {
         return false;
     }
@@ -33,6 +34,16 @@ export const persistenceService = {
         return null;
     } catch (e) {
         return null;
+    }
+  },
+
+  checkR2Health: async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/r2-health?key=${API_KEY}`);
+      if (res.ok) return await res.json();
+      return null;
+    } catch (e) {
+      return null;
     }
   },
 
@@ -115,11 +126,11 @@ export const persistenceService = {
         console.warn("[Persistence] Backend login failed, checking bypass...");
     }
 
-    // AUTH BYPASS FOR LOCAL/DEV DEMO
-    if (id === 'admin' && (password === 'admin' || password === '123')) {
+    // AUTH BYPASS FOR LOCAL/DEV DEMO - Aligned with Supabase Seed (ADM-ROOT)
+    if ((id === 'admin' || id === 'ADM-ROOT') && (password === 'admin' || password === '123')) {
          return { 
             token: 'dev-bypass-token', 
-            user: { id: 'ADM-ROOT', name: 'Administrator (Bypass)', role: 'Admin' } 
+            user: { id: 'ADM-ROOT', name: 'Administrator', role: 'Admin' } 
          };
     }
 
@@ -149,35 +160,58 @@ export const persistenceService = {
   },
 
   addOfficerAPI: async (officer: Partial<SalesOfficer>) => {
+     console.log("[Persistence] Initiating Node Deployment for:", officer.id);
      const payload = {
          ...officer,
          lastUpdate: new Date().toISOString(),
          status: 'Offline'
      };
 
-     const token = localStorage.getItem('bdo_auth_token');
-     const promises = [
-         fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-             body: JSON.stringify(payload)
-         })
-     ];
+     const token = localStorage.getItem('bdo_auth_token') || 'dev-bypass-token';
+     
+     // 1. NEON DB SYNC
+     const neonTask = fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
+         method: 'POST',
+         headers: { 
+           'Content-Type': 'application/json', 
+           'Authorization': `Bearer ${token}` 
+         },
+         body: JSON.stringify(payload)
+     })
+     .then(async res => {
+       if (res.ok) return 'Neon Sync OK';
+       const errTxt = await res.text();
+       throw new Error(`Neon FAIL: ${res.status} ${errTxt}`);
+     })
+     .catch(err => {
+       console.error(err);
+       return `Neon Sync FAIL: ${err.message}`;
+     });
 
+     // 2. SUPABASE DB SYNC
+     let supabaseTask = Promise.resolve('Supabase Client Not Active');
      if (supabase) {
-        promises.push(supabase.from('officers').upsert({
+        supabaseTask = supabase.from('officers').upsert({
             id: officer.id,
             name: officer.name,
             role: officer.role || 'Senior BDO',
+            avatar: officer.avatar || '',
             status: 'Offline',
             last_update: new Date(),
             password: officer.password || '123',
             leads: officer.leads || [],
             tasks: []
-        }));
+        }).then(res => {
+          if (res.error) {
+            console.error("Supabase Upsert Error:", res.error);
+            return `Supabase Sync FAIL: ${res.error.message}`;
+          }
+          return 'Supabase Sync OK';
+        });
      }
      
-     await Promise.allSettled(promises);
+     const results = await Promise.allSettled([neonTask, supabaseTask]);
+     console.log("[Persistence] Dual-Write Summary:", results.map(r => r.status === 'fulfilled' ? r.value : r.reason));
   },
 
   deleteOfficerAPI: async (id: string) => {

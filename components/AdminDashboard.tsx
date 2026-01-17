@@ -36,9 +36,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isCleaning, setIsCleaning] = useState(false);
   
   // Infrastructure Health State
-  const [node01Active, setNode01Active] = useState(false);
-  const [node02Active, setNode02Active] = useState(false);
+  const [renderActive, setRenderActive] = useState(false);
+  const [supabaseActive, setSupabaseActive] = useState(false);
   const [neonActive, setNeonActive] = useState(false);
+  const [r2Active, setR2Active] = useState(false);
 
   // AI State
   const [recommendations, setRecommendations] = useState<DispatchRecommendation[]>([]);
@@ -47,12 +48,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     const checkHealth = async () => {
-        const n1 = await persistenceService.checkNode01();
-        const n2 = await persistenceService.checkNode02();
+        const render = await persistenceService.checkNode01();
+        const sup = await persistenceService.checkNode02();
         const neon = await persistenceService.getNeonStats();
-        setNode01Active(n1);
-        setNode02Active(n2);
+        const r2 = await persistenceService.checkR2Health();
+        
+        setRenderActive(render);
+        setSupabaseActive(sup);
         setNeonActive(!!neon);
+        setR2Active(!!r2);
     };
     checkHealth();
     const healthTimer = setInterval(checkHealth, 15000);
@@ -102,7 +106,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* --- TOP HEADER BAR --- */}
-      <header className="h-20 bg-[#1e293b] border-b border-white/5 flex items-center justify-between px-6 z-20 shadow-2xl shrink-0">
+      <header className="h-24 bg-[#1e293b] border-b border-white/5 flex items-center justify-between px-6 z-20 shadow-2xl shrink-0">
         <div className="flex items-center gap-8">
             <div className="flex items-center gap-4">
                 <div className="w-10 h-10 rounded-xl bg-[#FFD100] flex items-center justify-center text-[#003366] font-black text-xl">B</div>
@@ -112,11 +116,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
             </div>
             
-            <div className="hidden lg:flex gap-6 items-center">
-                 <HealthOrb label="PRIMARY_NODE" active={node01Active} color="cyan" />
+            <div className="hidden lg:flex gap-4 items-center border-l border-white/5 pl-8">
+                 <HealthOrb label="RENDER_API" active={renderActive} color="purple" />
                  <HealthOrb label="NEON_DB" active={neonActive} color="blue" />
-                 <HealthOrb label="SYNC_CLUSTER" active={node02Active} color="emerald" />
-                 <HealthOrb label="UPLINK" active={wsStatus === 'Broadcasting_Live'} color="purple" />
+                 <HealthOrb label="SUPABASE" active={supabaseActive} color="emerald" />
+                 <HealthOrb label="CLOUDFLARE_R2" active={r2Active} color="cyan" />
+                 <div className="h-8 w-px bg-white/5 mx-2"></div>
+                 <HealthOrb label="WS_UPLINK" active={wsStatus === 'Broadcasting_Live'} color="amber" />
             </div>
         </div>
 
@@ -284,12 +290,12 @@ const AddBDOForm = ({ onAdd }: { onAdd: (n: string, c: string, p: string, a: str
     );
 };
 
-const HealthOrb = ({ label, active, color }: any) => (
-    <div className="flex flex-col">
-        <span className="text-[7px] text-slate-500 uppercase font-black tracking-widest mb-1 opacity-70">{label}</span>
-        <div className="flex items-center gap-2 px-2 py-1 rounded bg-black/20 border border-white/5">
-            <div className={`w-1.5 h-1.5 rounded-full ${active ? `bg-${color}-400 animate-pulse` : 'bg-red-500'}`}></div>
-            <span className={`text-[9px] font-mono ${active ? `text-${color}-400` : 'text-red-500'}`}>{active ? 'UP' : 'DOWN'}</span>
+const HealthOrb = ({ label, active, color }: { label: string, active: boolean, color: string }) => (
+    <div className="flex flex-col min-w-[80px]">
+        <span className="text-[7px] text-slate-500 uppercase font-black tracking-widest mb-1 opacity-70 whitespace-nowrap">{label}</span>
+        <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-black/20 border border-white/5 transition-all">
+            <div className={`w-2 h-2 rounded-full ${active ? `bg-${color}-400 shadow-[0_0_8px_rgba(34,211,238,0.5)]` : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`}></div>
+            <span className={`text-[9px] font-black font-mono ${active ? `text-${color}-400` : 'text-red-500'}`}>{active ? 'ACTIVE' : 'OFFLINE'}</span>
         </div>
     </div>
 );
@@ -298,7 +304,7 @@ const NavIcon = ({ active, onClick, icon, label }: any) => (
     <button onClick={onClick} className={`flex flex-col items-center gap-1 group transition-all duration-300`}>
         <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${active ? 'bg-[#FFD100] text-[#003366]' : 'text-slate-500 hover:bg-white/5'}`}>
             {icon === 'map' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>}
-            {icon === 'cpu' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>}
+            {icon === 'cpu' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2-2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>}
             {icon === 'shield' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>}
             {icon === 'arch' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>}
             {icon === 'settings' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
