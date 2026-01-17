@@ -1,21 +1,19 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 
-// Initialize the Gemini API client using the required process.env.API_KEY.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Fix: Implemented identity verification with multimodal support using gemini-3-flash-preview.
 export const verifyBdoIdentity = async (base64Image: string) => {
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
         parts: [
-          { text: "Verify if this person is a bank officer. Return a JSON object with 'verified' (boolean), 'confidence' (number 0-100), and a short 'welcomeMessage'." },
           { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } }
         ]
       },
       config: {
+        systemInstruction: "You are a specialized security agent for BDO Bank. Analyze the provided image to verify if it depicts a legitimate bank officer in uniform or a professional setting. Output only the specified JSON format.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -36,13 +34,13 @@ export const verifyBdoIdentity = async (base64Image: string) => {
   }
 };
 
-// Fix: Implemented intelligent dispatch recommendations using complex reasoning model.
 export const getDispatchRecommendations = async (officers: any[], leads: any[]) => {
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Based on current BDO fleet: ${JSON.stringify(officers)} and leads: ${JSON.stringify(leads)}, generate optimized dispatch recommendations. Return an array of objects.`,
+      contents: `Fleet Status: ${JSON.stringify(officers)}\nLeads: ${JSON.stringify(leads)}`,
       config: {
+        systemInstruction: "You are an expert logistics coordinator for BDO. Analyze the BDO locations, battery levels, and lead priority to generate the most efficient dispatch plan. Prioritize BDOs with higher battery and closer proximity to high-value leads.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -68,19 +66,19 @@ export const getDispatchRecommendations = async (officers: any[], leads: any[]) 
   }
 };
 
-// Fix: Implemented report sentiment analysis and risk categorization.
 export const analyzeReportSentiment = async (report: any) => {
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Analyze the sentiment and risk level of this interaction report: ${JSON.stringify(report)}`,
+      contents: `Report Body: ${JSON.stringify(report)}`,
       config: {
+        systemInstruction: "Analyze the sentiment and business risk of this field report. Identify if the client is satisfied and if there are any critical blockers. Categorize risk as Low, Medium, or High.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             sentiment: { type: Type.STRING },
-            riskLevel: { type: Type.STRING, description: "Must be Low, Medium, or High" },
+            riskLevel: { type: Type.STRING },
             summary: { type: Type.STRING }
           },
           required: ["sentiment", "riskLevel", "summary"]
@@ -94,28 +92,17 @@ export const analyzeReportSentiment = async (report: any) => {
   }
 };
 
-// Fix: Implemented executive sales performance summary.
 export const getSalesPerformanceSummary = async (officers: any[]) => {
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Summarize the overall team performance and pipeline status for these officers: ${JSON.stringify(officers)}`,
+      contents: `Current Fleet Data: ${JSON.stringify(officers)}`,
+      config: {
+        systemInstruction: "Provide a concise, high-level executive summary of team performance. Focus on pipeline value, visit efficiency, and any critical fleet issues like low battery or inactive members. Use a professional, bank-executive tone."
+      }
     });
     return { text: response.text || "AI Summary Currently Unavailable" };
   } catch (error) {
     return { text: "AI Summary Disabled" };
-  }
-};
-
-// Fix: Implemented route optimization utilizing spatial reasoning.
-export const getOptimizedVisitRoute = async (location: string) => {
-  try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: `Optimize a visit route starting from ${location} for maximum QR merchant onboarding efficiency.`,
-    });
-    return { text: response.text || "Route Optimization Unavailable" };
-  } catch (error) {
-    return { text: "Route Optimization Disabled" };
   }
 };
