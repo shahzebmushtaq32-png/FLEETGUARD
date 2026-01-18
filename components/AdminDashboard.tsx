@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, SalesOfficer, Geofence, Message, SystemStats, DispatchRecommendation } from '../types';
+import { User, SalesOfficer, Geofence, Message, SystemStats, DispatchRecommendation, Incident } from '../types';
 import Sidebar from './Sidebar';
 import MapComponent from './MapComponent';
 import DispatchHub from './DispatchHub';
 import AuditPanel from './AuditPanel';
 import GeminiAssistant from './GeminiAssistant';
 import ArchitectureGuide from './ArchitectureGuide';
+import IncidentFeed from './IncidentFeed';
 import { persistenceService } from '../services/persistenceService';
 import { getDispatchRecommendations } from '../services/geminiService';
 
@@ -16,6 +17,7 @@ interface AdminDashboardProps {
   geofences: Geofence[];
   stats: SystemStats;
   messages: Message[];
+  incidents: Incident[];
   onLogout: () => void;
   onAddBDO: (name: string, code: string, pass: string, avatar: string) => void;
   onDeleteBDO: (id: string) => void;
@@ -27,21 +29,19 @@ interface AdminDashboardProps {
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-  officers, onLogout, onAddBDO, onDeleteBDO, onAssignTask, wsStatus, systemMode, onToggleSystemMode 
+  officers, incidents, onLogout, onAddBDO, onDeleteBDO, onAssignTask, wsStatus, systemMode, onToggleSystemMode 
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'map' | 'dispatch' | 'audit' | 'arch' | 'ops'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'dispatch' | 'audit' | 'arch' | 'ops' | 'alerts'>('map');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showAddModal, setShowAddModal] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   
-  // Infrastructure Health State
   const [renderActive, setRenderActive] = useState(false);
   const [supabaseActive, setSupabaseActive] = useState(false);
   const [neonActive, setNeonActive] = useState(false);
   const [r2Active, setR2Active] = useState(false);
 
-  // AI State
   const [recommendations, setRecommendations] = useState<DispatchRecommendation[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
@@ -85,7 +85,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="flex flex-col h-screen w-full bg-[#0f172a] text-white font-sans overflow-hidden">
       
-      {/* --- ADD BDO MODAL --- */}
       {showAddModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
            <div className="bg-[#1e293b] border border-white/10 rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl">
@@ -105,7 +104,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* --- TOP HEADER BAR --- */}
       <header className="h-24 bg-[#1e293b] border-b border-white/5 flex items-center justify-between px-6 z-20 shadow-2xl shrink-0">
         <div className="flex items-center gap-8">
             <div className="flex items-center gap-4">
@@ -155,6 +153,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="flex flex-1 overflow-hidden relative">
         <nav className="w-20 bg-[#1e293b] border-r border-white/5 flex flex-col items-center py-6 gap-6 z-30 shadow-2xl">
             <NavIcon active={activeTab === 'map'} onClick={() => setActiveTab('map')} icon="map" label="Map" />
+            <NavIcon active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} icon="bell" label="Alerts" count={incidents.filter(i => i.severity === 'critical').length} />
             <NavIcon active={activeTab === 'dispatch'} onClick={() => setActiveTab('dispatch')} icon="cpu" label="AI Hub" />
             <NavIcon active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} icon="shield" label="Audit" />
             <NavIcon active={activeTab === 'arch'} onClick={() => setActiveTab('arch')} icon="arch" label="Arch" />
@@ -168,6 +167,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <main className="flex-1 relative bg-[#020617] overflow-hidden">
             {activeTab === 'map' && (
                 <MapComponent devices={officers} selectedId={selectedId} onSelect={setSelectedId} />
+            )}
+
+            {activeTab === 'alerts' && (
+                <div className="p-8 h-full flex flex-col overflow-y-auto custom-scrollbar">
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tight mb-8">Grid Alerts</h2>
+                    <IncidentFeed incidents={incidents} />
+                </div>
             )}
 
             {activeTab === 'dispatch' && (
@@ -300,15 +306,21 @@ const HealthOrb = ({ label, active, color }: { label: string, active: boolean, c
     </div>
 );
 
-const NavIcon = ({ active, onClick, icon, label }: any) => (
-    <button onClick={onClick} className={`flex flex-col items-center gap-1 group transition-all duration-300`}>
+const NavIcon = ({ active, onClick, icon, label, count }: any) => (
+    <button onClick={onClick} className={`flex flex-col items-center gap-1 group transition-all duration-300 relative`}>
         <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${active ? 'bg-[#FFD100] text-[#003366]' : 'text-slate-500 hover:bg-white/5'}`}>
             {icon === 'map' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>}
+            {icon === 'bell' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>}
             {icon === 'cpu' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2-2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>}
             {icon === 'shield' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>}
             {icon === 'arch' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>}
             {icon === 'settings' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
         </div>
+        {count > 0 && (
+            <div className="absolute top-1 right-2 bg-red-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-[#1e293b]">
+                {count}
+            </div>
+        )}
         <span className={`text-[8px] font-black uppercase tracking-widest ${active ? 'text-[#FFD100]' : 'text-slate-600'}`}>{label}</span>
     </button>
 );

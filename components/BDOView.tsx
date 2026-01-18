@@ -16,24 +16,25 @@ interface BDOViewProps {
   onReportIncident: (inc: Omit<Incident, 'id'>) => void;
   wsStatus?: string;
   isOnline?: boolean;
+  systemMode: 'DEV' | 'PROD';
 }
 
-export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, isOnline = true }) => {
+export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, isOnline = true, systemMode }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'leads' | 'jobs' | 'selfie'>('home');
   const [currentStatus, setCurrentStatus] = useState<SalesOfficer['status']>(officer?.status || 'Active');
   
-  // Local state for immediate UI feedback
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [realBattery, setRealBattery] = useState<number>(officer?.battery || 100);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [isWakeLocked, setIsWakeLocked] = useState(false);
   
-  // hardware blocked functions removed: starting in unlocked state
-  const [isSecurityLocked, setIsSecurityLocked] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const persistentStreamRef = useRef<MediaStream | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const wakeLockRef = useRef<any>(null);
 
   const [permStatus, setPermStatus] = useState({
     cam: 'pending',
@@ -41,70 +42,121 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     mock: 'pending'
   });
 
-  // Sync with prop updates from server/parent
+  // Shift Enforcement Logic (11 AM - 6 PM)
+  const [isOutOfShift, setIsOutOfShift] = useState(false);
+  
+  useEffect(() => {
+    const checkShift = () => {
+      const hour = new Date().getHours();
+      // Shift active between 11:00 and 18:00
+      const outside = hour < 11 || hour >= 18;
+      setIsOutOfShift(systemMode === 'PROD' && outside);
+    };
+    checkShift();
+    const interval = setInterval(checkShift, 60000);
+    return () => clearInterval(interval);
+  }, [systemMode]);
+
+  // PROTECTIVE: Request Wake Lock to prevent CPU sleep in battery saver mode
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        setIsWakeLocked(true);
+        console.log("CPU/Screen WakeLock Secured.");
+      } catch (err) {
+        console.warn("WakeLock Denied:", err);
+      }
+    }
+  };
+
   useEffect(() => {
     if (officer?.avatar && officer.avatar !== capturedPhoto) {
       setCapturedPhoto(officer.avatar);
     }
   }, [officer?.avatar]);
 
-  // Memoized broadcast to avoid stale closures
+  const reportGpsBreach = useCallback((errorType: string) => {
+    if (!officer) return;
+    const breach: Incident = {
+      id: `GPS_${officer.id}_${Date.now()}`,
+      title: "GPS UPLINK BREACH",
+      desc: `Agent ${officer.name} (${officer.id}) location services are ${errorType}. Perimeter tracking lost.`,
+      time: new Date(),
+      severity: 'critical'
+    };
+    socketService.sendIncident(breach);
+  }, [officer]);
+
   const broadcastTelemetry = useCallback((customPayload?: Partial<SalesOfficer>) => {
     if (!officer) return;
-
-    const performBroadcast = (lat: number, lng: number) => {
-      const activeAvatar = customPayload?.avatar || capturedPhoto || officer.avatar;
-      const telemetry = {
-        id: officer.id,
-        lat: lat,
-        lng: lng,
-        battery: realBattery,
-        status: currentStatus,
-        avatar: activeAvatar,
-        lastUpdate: new Date(),
-        ...customPayload
-      };
-      socketService.sendTelemetry(telemetry);
+    const activeAvatar = customPayload?.avatar || capturedPhoto || officer.avatar;
+    const telemetry: Partial<SalesOfficer> = {
+      id: officer.id,
+      lat: customPayload?.lat || officer.lat,
+      lng: customPayload?.lng || officer.lng,
+      battery: realBattery,
+      status: currentStatus,
+      avatar: activeAvatar,
+      lastUpdate: new Date(),
+      telemetrySource: 'ANDROID_BG', // Tagging as background-ready
+      ...customPayload
     };
-
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => performBroadcast(pos.coords.latitude, pos.coords.longitude),
-        () => performBroadcast(14.5547, 121.0244), // Fallback to Makati coords if blocked
-        { enableHighAccuracy: true }
-      );
-    } else {
-      performBroadcast(14.5547, 121.0244);
-    }
+    socketService.sendTelemetry(telemetry);
   }, [officer, realBattery, currentStatus, capturedPhoto]);
+
+  // PERSISTENT CAMERA: Keep open even when switching tabs
+  const initPersistentCamera = async () => {
+    try {
+      if (persistentStreamRef.current) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } 
+      });
+      persistentStreamRef.current = stream;
+      setPermStatus(p => ({ ...p, cam: 'ok' }));
+      // Assign to current video element if in selfie tab
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    } catch (err) {
+      setPermStatus(p => ({ ...p, cam: 'fail' }));
+      setSecurityError("Persistent Camera Blocked.");
+    }
+  };
 
   useEffect(() => {
     const initHardware = async () => {
-      // Camera check
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-        stream.getTracks().forEach(t => t.stop());
-        setPermStatus(p => ({ ...p, cam: 'ok' }));
-      } catch (e) {
-        setPermStatus(p => ({ ...p, cam: 'fail' }));
-      }
+      // Initialize both Camera and WakeLock on start
+      await initPersistentCamera();
+      await requestWakeLock();
 
-      // Geo check
+      // Start Realtime GPS Watch (High Precision)
       if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(
+        watchIdRef.current = navigator.geolocation.watchPosition(
           (pos) => {
+            const { latitude, longitude, accuracy } = pos.coords;
             const c = pos.coords as any;
-            const isMocked = c.mocked === true || c.accuracy <= 1.0;
+            const isMocked = c.mocked === true || accuracy <= 1.0;
+            
             setPermStatus(p => ({ ...p, geo: 'ok', mock: isMocked ? 'fail' : 'ok' }));
+            
+            // If accuracy is too low (>150m), it might be battery saver throttling
+            if (accuracy > 150) {
+              reportGpsBreach("THROTTLED_LOW_ACCURACY");
+            }
+
+            broadcastTelemetry({ lat: latitude, lng: longitude });
           },
-          () => setPermStatus(p => ({ ...p, geo: 'fail' })),
-          { enableHighAccuracy: true }
+          (err) => {
+            setPermStatus(p => ({ ...p, geo: 'fail' }));
+            if (err.code === err.PERMISSION_DENIED) reportGpsBreach("DENIED");
+            else if (err.code === err.POSITION_UNAVAILABLE) reportGpsBreach("UNAVAILABLE");
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
       } else {
-        setPermStatus(p => ({ ...p, geo: 'fail' }));
+        reportGpsBreach("UNSUPPORTED");
       }
 
-      // Hardware Battery Link
+      // Battery Link
       if ('getBattery' in navigator) {
         const battery: any = await (navigator as any).getBattery();
         const updateBatt = () => setRealBattery(Math.round(battery.level * 100));
@@ -114,36 +166,32 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     };
 
     initHardware();
-  }, []);
 
-  // Immediate sync on status/battery change
+    // Re-request WakeLock if app returns to focus
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+        if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+        document.removeEventListener('visibilitychange', handleVisibility);
+        // We do NOT stop the camera here to ensure persistence as requested
+    };
+  }, [broadcastTelemetry, reportGpsBreach]);
+
+  // Sync Video Element when tab changes to selfie
+  useEffect(() => {
+    if (activeTab === 'selfie' && videoRef.current && persistentStreamRef.current) {
+      videoRef.current.srcObject = persistentStreamRef.current;
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     broadcastTelemetry();
   }, [currentStatus, realBattery, broadcastTelemetry]);
-
-  // Camera handling for Biometrics/Selfie (Now optional in Audit tab)
-  useEffect(() => {
-    if (activeTab === 'selfie') {
-      const startCamera = async () => {
-        try {
-          if (streamRef.current) return;
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } 
-          });
-          streamRef.current = stream;
-          if (videoRef.current) videoRef.current.srcObject = stream;
-        } catch (err) {
-          setSecurityError("Camera access denied.");
-        }
-      };
-      startCamera();
-    } else {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-        streamRef.current = null;
-      }
-    }
-  }, [activeTab]);
 
   const handleSelfieCapture = async () => {
     if (!videoRef.current || !canvasRef.current || !officer) {
@@ -192,12 +240,55 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   return (
     <div className="h-full flex flex-col bg-[#f8fafc] font-sans relative overflow-hidden">
        <canvas ref={canvasRef} className="hidden" />
-       <div className="bg-[#001D3D] px-6 py-3 flex items-center justify-between">
+       
+       {/* SHIFT STANDBY OVERLAY */}
+       {isOutOfShift && (
+         <div className="fixed inset-0 z-[200] bg-[#001D3D] flex flex-col items-center justify-center p-12 text-center animate-in fade-in duration-500">
+            <div className="w-24 h-24 bg-white/5 border border-white/10 rounded-full flex items-center justify-center mb-8 relative">
+               <svg className="w-10 h-10 text-white opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+               <div className="absolute inset-0 border-2 border-dashed border-white/20 rounded-full animate-spin-slow"></div>
+            </div>
+            <h2 className="text-xl font-black text-white uppercase tracking-widest mb-2">Shift Standby</h2>
+            <p className="text-[9px] text-white/50 font-bold uppercase tracking-[0.2em] mb-10 leading-relaxed">
+               Uplink Restricted Outside Authorized Hours<br/>(11:00 AM - 06:00 PM)
+            </p>
+            <div className="bg-white/5 px-6 py-4 rounded-3xl border border-white/10 flex items-center gap-4">
+               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+               <span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest">Background Telemetry: ACTIVE</span>
+            </div>
+            <button onClick={onLogout} className="mt-12 text-[10px] font-black text-white/30 uppercase tracking-widest hover:text-white transition-colors">Terminate Session</button>
+         </div>
+       )}
+
+       {/* PROTECTIVE HEADER STATUS */}
+       <div className="bg-[#001D3D] px-6 py-2 flex items-center justify-between border-b border-white/5">
            <div className="flex items-center gap-3">
-               <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
+               <span className="text-[7px] font-black text-white/40 uppercase tracking-[0.2em]">CORE_LINK_STABLE</span>
+           </div>
+           <div className="flex items-center gap-3">
+               <div className={`flex items-center gap-1 text-[7px] font-black uppercase px-2 py-0.5 rounded-full ${isWakeLocked ? 'bg-cyan-500/10 text-cyan-400' : 'bg-red-500/10 text-red-400'}`}>
+                   {isWakeLocked ? 'WakeLock:ON' : 'WakeLock:OFF'}
+               </div>
+               <div className="flex items-center gap-1 text-[7px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                   CAM:ACTIVE
+               </div>
+           </div>
+       </div>
+
+       <div className="bg-[#001D3D] px-6 py-1.5 flex items-center justify-between">
+           <div className="flex items-center gap-3">
                <span className="text-[8px] font-black text-white/50 uppercase tracking-[0.2em]">NODE: {officer.id}</span>
            </div>
-           <span className="text-[8px] font-black text-white/50 uppercase">Grid Status: {wsStatus}</span>
+           <div className="flex items-center gap-4">
+               {permStatus.geo === 'fail' && (
+                   <span className="flex items-center gap-1 text-[8px] font-black text-red-400 animate-bounce">
+                       <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd"></path></svg>
+                       GPS_FAIL
+                   </span>
+               )}
+               <span className="text-[8px] font-black text-white/50 uppercase tracking-widest">UPLINK: {wsStatus}</span>
+           </div>
        </div>
 
        <header className="bg-[#003366] text-white px-6 pt-10 pb-12 rounded-b-[4.5rem] shadow-2xl relative z-10">
@@ -235,9 +326,11 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                        <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Unit Load</p>
                        <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount || 0}</p>
                    </div>
-                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
+                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center relative overflow-hidden">
+                       <div className="absolute top-0 right-0 w-2 h-full bg-slate-50"></div>
                        <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Power Status</p>
                        <p className={`text-3xl font-black ${realBattery < 20 ? 'text-red-500 animate-pulse' : 'text-[#003366]'}`}>{realBattery}%</p>
+                       {realBattery < 30 && <p className="text-[7px] text-red-400 font-bold uppercase mt-2">Plug in soon</p>}
                    </div>
                    <div className="col-span-2 bg-white p-8 rounded-[3.5rem] shadow-xl border border-slate-50 flex items-center justify-between relative overflow-hidden group">
                        <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFD100]/10 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700"></div>
@@ -253,14 +346,17 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
            {activeTab === 'selfie' && (
                <div className="bg-white rounded-[3.5rem] p-10 shadow-2xl text-center border border-slate-100 animate-in fade-in zoom-in-95 duration-300">
                     <h2 className="text-2xl font-black text-[#003366] uppercase tracking-tight mb-2">Biometric Audit</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Update Identity Proof</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Background Analytics Active</p>
                     <div className="relative rounded-[2.5rem] overflow-hidden aspect-square bg-[#001D3D] mb-8 border-[6px] border-slate-50 shadow-inner">
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
                         <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-cyan-400 shadow-[0_0_15px_cyan] animate-[scan_3s_infinite]"></div>
+                        <div className="absolute bottom-4 left-0 right-0">
+                             <span className="bg-emerald-500 text-white text-[7px] font-black uppercase px-3 py-1 rounded-full">Persistent Stream</span>
+                        </div>
                     </div>
                     {securityError && <div className="mb-6 bg-blue-50 p-4 rounded-2xl"><p className="text-[9px] font-black text-[#003366] uppercase">{securityError}</p></div>}
                     <button onClick={handleSelfieCapture} disabled={isCapturing} className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] tracking-[0.2em] shadow-xl disabled:opacity-50 transition-all">
-                        {isCapturing ? 'Verifying...' : 'Perform Capture'}
+                        {isCapturing ? 'Analyzing...' : 'Perform Capture'}
                     </button>
                     <style>{` @keyframes scan { 0%, 100% { top: 10%; } 50% { top: 90%; } } `}</style>
                </div>
@@ -308,9 +404,9 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
 
        <nav className="bg-white px-8 pb-12 pt-6 border-t border-slate-100 flex justify-between rounded-t-[4.5rem] shadow-2xl relative z-20">
            <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon="home" label="HUD" />
-           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} icon="users" label="Grid" />
-           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs')} icon="briefcase" label="Jobs" />
-           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie')} icon="camera" label="Audit" />
+           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads'} icon="users" label="Grid" />
+           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs'} icon="briefcase" label="Jobs" />
+           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie'} icon="camera" label="Audit" />
        </nav>
     </div>
   );

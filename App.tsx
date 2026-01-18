@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { SalesOfficer, User, UserRole, SystemStats } from './types';
+import { SalesOfficer, User, UserRole, SystemStats, Incident } from './types';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import { BDOView } from './components/BDOView';
@@ -18,6 +18,7 @@ const INITIAL_OFFICER_TEMPLATE: SalesOfficer = {
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [officers, setOfficers] = useState<SalesOfficer[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('Disconnected');
   const [isLoading, setIsLoading] = useState(false);
   const [systemMode, setSystemMode] = useState<'DEV' | 'PROD'>((localStorage.getItem('bdo_system_mode') as 'DEV' | 'PROD') || 'DEV');
@@ -37,6 +38,7 @@ const App: React.FC = () => {
     if (user) {
       loadData();
       socketService.connect(user.role === 'Admin' ? 'dashboard' : 'iot', setWsStatus);
+      
       socketService.onDeviceUpdate((updates) => {
         setOfficers(prev => {
           const next = [...prev];
@@ -47,6 +49,10 @@ const App: React.FC = () => {
           });
           return next;
         });
+      });
+
+      socketService.onIncident((inc) => {
+        setIncidents(prev => [inc, ...prev].slice(0, 50));
       });
     }
     return () => socketService.disconnect();
@@ -90,7 +96,8 @@ const App: React.FC = () => {
     <div className="h-screen w-full bg-slate-50 overflow-hidden">
       {user.role === 'Admin' ? (
         <AdminDashboard 
-          user={user} officers={officers} geofences={[]} stats={stats} messages={[]} onLogout={handleLogout}
+          user={user} officers={officers} geofences={[]} stats={stats} 
+          messages={[]} incidents={incidents} onLogout={handleLogout}
           onAddBDO={(n, c, p, a) => persistenceService.addOfficerAPI({ id: c, name: n, password: p, avatar: a }).then(loadData)}
           onDeleteBDO={(id) => persistenceService.deleteOfficerAPI(id).then(loadData)}
           onAssignTask={() => {}} onSendMessage={() => {}} wsStatus={wsStatus} systemMode={systemMode}
@@ -101,7 +108,7 @@ const App: React.FC = () => {
           }}
         />
       ) : (
-        currentOfficer && <BDOView user={user} officer={currentOfficer} messages={[]} onLogout={handleLogout} onSendMessage={() => {}} onReportIncident={() => {}} wsStatus={wsStatus} isOnline={true} />
+        currentOfficer && <BDOView user={user} officer={currentOfficer} messages={[]} onLogout={handleLogout} onSendMessage={() => {}} onReportIncident={() => {}} wsStatus={wsStatus} isOnline={true} systemMode={systemMode} />
       )}
     </div>
   );

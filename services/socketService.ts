@@ -11,6 +11,7 @@ class SocketService {
   private onChatCallback: ((msg: Message) => void) | null = null;
   private onIncidentCallback: ((inc: Incident) => void) | null = null;
   private onStatusChangeCallback: ((s: ConnectionStatus) => void) | null = null;
+  private heartbeatInterval: any = null;
 
   async connect(role: 'dashboard' | 'iot', onStatusChange: (s: ConnectionStatus) => void) {
     this.onStatusChangeCallback = onStatusChange;
@@ -50,10 +51,13 @@ class SocketService {
             .subscribe((status: string) => {
                 if (status === 'SUBSCRIBED') {
                     this.updateStatus('Broadcasting_Live');
+                    this.startHeartbeat();
                 } else if (status === 'CLOSED') {
                     this.updateStatus('Disconnected');
+                    this.stopHeartbeat();
                 } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
                     this.updateStatus('Error');
+                    this.stopHeartbeat();
                 }
             });
     } catch (e) {
@@ -62,7 +66,25 @@ class SocketService {
     }
   }
 
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    // Heartbeat every 20 seconds to keep background channel open
+    this.heartbeatInterval = setInterval(() => {
+        if (this.channel) {
+            this.channel.send({ type: 'broadcast', event: 'ping', payload: { time: Date.now() } });
+        }
+    }, 20000);
+  }
+
+  private stopHeartbeat() {
+      if (this.heartbeatInterval) {
+          clearInterval(this.heartbeatInterval);
+          this.heartbeatInterval = null;
+      }
+  }
+
   public disconnect() {
+    this.stopHeartbeat();
     if (this.channel && supabase) {
       supabase.removeChannel(this.channel);
       this.channel = null;
@@ -90,7 +112,6 @@ class SocketService {
   }
 
   async sendTelemetry(officer: Partial<SalesOfficer>) {
-    // Attempt send if channel exists, even if status is still 'Connecting'
     if (!this.channel) return;
     try {
         await this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer });

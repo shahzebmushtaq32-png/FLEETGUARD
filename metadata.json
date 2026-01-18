@@ -3,6 +3,12 @@
   "description": "A high-performance real-time IoT tracking dashboard designed for BDO Mobile services, featuring live mapping and device health monitoring.",
   "requestFramePermissions": [
     "geolocation",
-    "camera"
+    "camera",
+    "microphone"
+  ],
+  "androidPermissions": [
+    "android.permission.ACCESS_BACKGROUND_LOCATION",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.WAKE_LOCK"
   ]
 }
