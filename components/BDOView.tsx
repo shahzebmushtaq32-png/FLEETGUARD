@@ -404,9 +404,9 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
 
        <nav className="bg-white px-8 pb-12 pt-6 border-t border-slate-100 flex justify-between rounded-t-[4.5rem] shadow-2xl relative z-20">
            <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon="home" label="HUD" />
-           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads'} icon="users" label="Grid" />
-           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs'} icon="briefcase" label="Jobs" />
-           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie'} icon="camera" label="Audit" />
+           <NavButton active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} icon="users" label="Grid" />
+           <NavButton active={activeTab === 'jobs'} onClick={() => setActiveTab('jobs')} icon="briefcase" label="Jobs" />
+           <NavButton active={activeTab === 'selfie'} onClick={() => setActiveTab('selfie')} icon="camera" label="Audit" />
        </nav>
     </div>
   );
