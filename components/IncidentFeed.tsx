@@ -37,7 +37,8 @@ const IncidentFeed: React.FC<IncidentFeedProps> = ({ incidents }) => {
               {incident.title}
             </h4>
             <span className="text-[10px] font-mono font-bold text-slate-500 bg-[#001D3D] px-2 py-0.5 rounded">
-              {incident.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {/* PROTECTIVE: Wrap incident.time in new Date() to ensure stability */}
+              {new Date(incident.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </span>
           </div>
           <p className="text-xs text-slate-400 font-medium leading-relaxed">{incident.desc}</p>

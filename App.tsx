@@ -52,7 +52,12 @@ const App: React.FC = () => {
       });
 
       socketService.onIncident((inc) => {
-        setIncidents(prev => [inc, ...prev].slice(0, 50));
+        // PROTECTIVE: Ensure incoming time is always a Date object
+        const formattedInc = { 
+          ...inc, 
+          time: inc.time instanceof Date ? inc.time : new Date(inc.time) 
+        };
+        setIncidents(prev => [formattedInc, ...prev].slice(0, 50));
       });
     }
     return () => socketService.disconnect();
