@@ -20,13 +20,15 @@ interface BDOViewProps {
 
 export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, isOnline = true }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'leads' | 'jobs' | 'selfie'>('home');
-  const [currentStatus, setCurrentStatus] = useState<SalesOfficer['status']>(officer?.status || 'Offline');
+  const [currentStatus, setCurrentStatus] = useState<SalesOfficer['status']>(officer?.status || 'Active');
   
   // Local state for immediate UI feedback
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(officer?.avatar || null);
   const [realBattery, setRealBattery] = useState<number>(officer?.battery || 100);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [isSecurityLocked, setIsSecurityLocked] = useState(true);
+  
+  // hardware blocked functions removed: starting in unlocked state
+  const [isSecurityLocked, setIsSecurityLocked] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,25 +50,33 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
 
   // Memoized broadcast to avoid stale closures
   const broadcastTelemetry = useCallback((customPayload?: Partial<SalesOfficer>) => {
-    if (!officer || isSecurityLocked) return;
+    if (!officer) return;
 
-    navigator.geolocation.getCurrentPosition((pos) => {
+    const performBroadcast = (lat: number, lng: number) => {
       const activeAvatar = customPayload?.avatar || capturedPhoto || officer.avatar;
-      
       const telemetry = {
         id: officer.id,
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
+        lat: lat,
+        lng: lng,
         battery: realBattery,
         status: currentStatus,
         avatar: activeAvatar,
         lastUpdate: new Date(),
         ...customPayload
       };
-      
       socketService.sendTelemetry(telemetry);
-    }, undefined, { enableHighAccuracy: true });
-  }, [officer, isSecurityLocked, realBattery, currentStatus, capturedPhoto]);
+    };
+
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => performBroadcast(pos.coords.latitude, pos.coords.longitude),
+        () => performBroadcast(14.5547, 121.0244), // Fallback to Makati coords if blocked
+        { enableHighAccuracy: true }
+      );
+    } else {
+      performBroadcast(14.5547, 121.0244);
+    }
+  }, [officer, realBattery, currentStatus, capturedPhoto]);
 
   useEffect(() => {
     const initHardware = async () => {
@@ -108,12 +118,12 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
 
   // Immediate sync on status/battery change
   useEffect(() => {
-    if (!isSecurityLocked) broadcastTelemetry();
-  }, [currentStatus, realBattery, isSecurityLocked, broadcastTelemetry]);
+    broadcastTelemetry();
+  }, [currentStatus, realBattery, broadcastTelemetry]);
 
-  // Camera handling for Biometrics/Selfie
+  // Camera handling for Biometrics/Selfie (Now optional in Audit tab)
   useEffect(() => {
-    if (isSecurityLocked || activeTab === 'selfie') {
+    if (activeTab === 'selfie') {
       const startCamera = async () => {
         try {
           if (streamRef.current) return;
@@ -133,11 +143,11 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
         streamRef.current = null;
       }
     }
-  }, [isSecurityLocked, activeTab]);
+  }, [activeTab]);
 
-  const handleAuth = async () => {
+  const handleSelfieCapture = async () => {
     if (!videoRef.current || !canvasRef.current || !officer) {
-      setSecurityError("Hardware not ready.");
+      setSecurityError("Optics not ready.");
       return;
     }
 
@@ -157,66 +167,27 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       try {
           const aiResult = await verifyBdoIdentity(imageData);
           if (aiResult.verified) {
-              const uniqueFileName = `auth_${officer.id}_${Date.now()}.jpg`;
+              const uniqueFileName = `audit_${officer.id}_${Date.now()}.jpg`;
               const url = await r2Service.uploadEvidence(imageData, uniqueFileName);
               
               setCapturedPhoto(url);
               await persistenceService.updateOfficerAvatarAPI(officer.id, url);
-              
-              setIsSecurityLocked(false);
-              setCurrentStatus('Active');
-              sessionStorage.setItem('bdo_session_secure', 'true');
-              
-              // Direct broadcast with the fresh URL
-              broadcastTelemetry({ avatar: url, status: 'Active' });
+              broadcastTelemetry({ avatar: url });
+              setSecurityError("Identity Audit Synchronized.");
           } else {
-              setSecurityError(aiResult.welcomeMessage || "Identity sync failed.");
+              setSecurityError(aiResult.welcomeMessage || "Verification failed.");
           }
       } catch (e) {
-          console.error("AI Auth Error", e);
-          setIsSecurityLocked(false);
-          setCurrentStatus('Active');
-          broadcastTelemetry({ status: 'Active' });
+          console.error("AI Verify Error", e);
+          setSecurityError("Cloud analysis failed.");
       } finally {
           setIsCapturing(false);
       }
     } else {
-      setSecurityError("Optics initializing...");
+      setSecurityError("Camera initializing...");
       setIsCapturing(false);
     }
   };
-
-  if (permStatus.cam === 'fail' || permStatus.geo === 'fail') {
-    return (
-      <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-12 text-center text-white">
-        <h1 className="text-2xl font-black uppercase tracking-widest mb-4">Hardware Blocked</h1>
-        <button onClick={() => window.location.reload()} className="bg-[#FFD100] text-[#003366] px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl">Re-Authenticate</button>
-      </div>
-    );
-  }
-
-  if (isSecurityLocked) {
-    return (
-      <div className="h-screen w-full bg-[#001D3D] flex flex-col items-center justify-center p-6 overflow-hidden">
-        <canvas ref={canvasRef} className="hidden" />
-        <div className="w-full max-w-sm bg-white rounded-[3.5rem] p-10 shadow-2xl text-center relative z-10 border-[10px] border-[#003366]/5">
-            <div className="w-12 h-1.5 bg-[#FFD100] mx-auto rounded-full mb-10"></div>
-            <h2 className="text-2xl font-black text-[#003366] uppercase tracking-tight mb-2">Gate 01 Check</h2>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Synchronizing Identity</p>
-            <div className="relative rounded-[2.5rem] overflow-hidden aspect-square bg-[#001D3D] mb-8 border-[6px] border-slate-50 shadow-inner">
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-                <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-cyan-400 shadow-[0_0_15px_cyan] animate-[scan_3s_infinite]"></div>
-            </div>
-            {securityError && <div className="mb-6 bg-red-50 p-4 rounded-2xl"><p className="text-[9px] font-black text-red-600 uppercase leading-tight">{securityError}</p></div>}
-            <button onClick={handleAuth} disabled={isCapturing} className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] tracking-[0.2em] shadow-xl disabled:opacity-50">
-                {isCapturing ? 'Validating...' : 'Authenticate Node'}
-            </button>
-            <button onClick={onLogout} className="mt-8 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em]">End Shift</button>
-        </div>
-        <style>{` @keyframes scan { 0%, 100% { top: 10%; } 50% { top: 90%; } } `}</style>
-      </div>
-    );
-  }
 
   return (
     <div className="h-full flex flex-col bg-[#f8fafc] font-sans relative overflow-hidden">
@@ -258,24 +229,81 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
        </header>
 
        <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
-           <div className="grid grid-cols-2 gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-               <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
-                   <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Unit Load</p>
-                   <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount || 0}</p>
-               </div>
-               <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
-                   <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Power Status</p>
-                   <p className={`text-3xl font-black ${realBattery < 20 ? 'text-red-500 animate-pulse' : 'text-[#003366]'}`}>{realBattery}%</p>
-               </div>
-               <div className="col-span-2 bg-white p-8 rounded-[3.5rem] shadow-xl border border-slate-50 flex items-center justify-between relative overflow-hidden group">
-                   <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFD100]/10 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700"></div>
-                   <div className="relative z-10">
-                       <h4 className="text-[10px] font-black text-slate-400 uppercase mb-1">Pipeline Volume</h4>
-                       <p className="text-3xl font-black text-[#003366]">₱{((officer.pipelineValue || 0)/1000000).toFixed(1)}M</p>
+           {activeTab === 'home' && (
+               <div className="grid grid-cols-2 gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
+                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Unit Load</p>
+                       <p className="text-5xl font-black text-[#003366] tracking-tighter">{officer.visitCount || 0}</p>
                    </div>
-                   <GeminiLiveVoice />
+                   <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center">
+                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Power Status</p>
+                       <p className={`text-3xl font-black ${realBattery < 20 ? 'text-red-500 animate-pulse' : 'text-[#003366]'}`}>{realBattery}%</p>
+                   </div>
+                   <div className="col-span-2 bg-white p-8 rounded-[3.5rem] shadow-xl border border-slate-50 flex items-center justify-between relative overflow-hidden group">
+                       <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFD100]/10 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700"></div>
+                       <div className="relative z-10">
+                           <h4 className="text-[10px] font-black text-slate-400 uppercase mb-1">Pipeline Volume</h4>
+                           <p className="text-3xl font-black text-[#003366]">₱{((officer.pipelineValue || 0)/1000000).toFixed(1)}M</p>
+                       </div>
+                       <GeminiLiveVoice />
+                   </div>
                </div>
-           </div>
+           )}
+
+           {activeTab === 'selfie' && (
+               <div className="bg-white rounded-[3.5rem] p-10 shadow-2xl text-center border border-slate-100 animate-in fade-in zoom-in-95 duration-300">
+                    <h2 className="text-2xl font-black text-[#003366] uppercase tracking-tight mb-2">Biometric Audit</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10">Update Identity Proof</p>
+                    <div className="relative rounded-[2.5rem] overflow-hidden aspect-square bg-[#001D3D] mb-8 border-[6px] border-slate-50 shadow-inner">
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                        <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-cyan-400 shadow-[0_0_15px_cyan] animate-[scan_3s_infinite]"></div>
+                    </div>
+                    {securityError && <div className="mb-6 bg-blue-50 p-4 rounded-2xl"><p className="text-[9px] font-black text-[#003366] uppercase">{securityError}</p></div>}
+                    <button onClick={handleSelfieCapture} disabled={isCapturing} className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] tracking-[0.2em] shadow-xl disabled:opacity-50 transition-all">
+                        {isCapturing ? 'Verifying...' : 'Perform Capture'}
+                    </button>
+                    <style>{` @keyframes scan { 0%, 100% { top: 10%; } 50% { top: 90%; } } `}</style>
+               </div>
+           )}
+
+           {activeTab === 'leads' && (
+               <div className="bg-white p-10 rounded-[3.5rem] shadow-sm border border-slate-100 min-h-[400px]">
+                   <h3 className="text-lg font-black text-[#003366] uppercase tracking-tight mb-4">Grid Coverage</h3>
+                   <div className="space-y-4">
+                       {officer.leads.length === 0 ? (
+                           <p className="text-xs text-slate-400 font-bold uppercase py-10 text-center">No assigned leads in sector.</p>
+                       ) : (
+                           officer.leads.map(lead => (
+                               <div key={lead.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center">
+                                   <div>
+                                       <p className="text-[10px] font-black text-[#003366] uppercase">{lead.clientName}</p>
+                                       <p className="text-[8px] text-slate-400 font-bold uppercase">{lead.stage}</p>
+                                   </div>
+                                   <span className="text-[10px] font-black text-emerald-600">₱{(lead.value/1000).toFixed(0)}K</span>
+                               </div>
+                           ))
+                       )}
+                   </div>
+               </div>
+           )}
+
+           {activeTab === 'jobs' && (
+               <div className="bg-white p-10 rounded-[3.5rem] shadow-sm border border-slate-100 min-h-[400px]">
+                   <h3 className="text-lg font-black text-[#003366] uppercase tracking-tight mb-4">Active Tasks</h3>
+                   <div className="space-y-4">
+                       {officer.tasks.length === 0 ? (
+                           <p className="text-xs text-slate-400 font-bold uppercase py-10 text-center">Clear queue. Stand by for dispatch.</p>
+                       ) : (
+                           officer.tasks.map(task => (
+                               <div key={task.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                   <p className="text-[10px] font-black text-[#003366] uppercase">{task.title}</p>
+                                   <p className="text-[8px] text-slate-500 font-medium mt-1">{task.description}</p>
+                               </div>
+                           ))
+                       )}
+                   </div>
+               </div>
+           )}
        </main>
 
        <nav className="bg-white px-8 pb-12 pt-6 border-t border-slate-100 flex justify-between rounded-t-[4.5rem] shadow-2xl relative z-20">

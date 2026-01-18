@@ -9,7 +9,7 @@ export const persistenceService = {
   
   checkNode01: async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) });
       return res.ok;
     } catch { return false; }
   },
@@ -43,12 +43,20 @@ export const persistenceService = {
     const tasks = [
       (async () => {
         if (!supabase) return;
-        const { data } = await supabase.from('officers').select('*');
-        data?.forEach(o => resultsMap.set(o.id, { ...o, lastUpdate: new Date(o.last_update || Date.now()), leads: [], history: [], evidence: [], tasks: [] }));
+        try {
+          const { data } = await supabase.from('officers').select('*');
+          data?.forEach(o => resultsMap.set(o.id, { 
+            ...o, 
+            lastUpdate: new Date(o.last_update || Date.now()), 
+            leads: [], history: [], evidence: [], tasks: [] 
+          }));
+        } catch (e) { console.error("Supabase Fetch Error:", e); }
       })(),
       (async () => {
         try {
-          const res = await fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, { headers: { 'Authorization': `Bearer ${token}` } });
+          const res = await fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, { 
+            headers: { 'Authorization': `Bearer ${token}` } 
+          });
           if (res.ok) {
             const data = await res.json();
             data.forEach((o: any) => {
@@ -58,7 +66,7 @@ export const persistenceService = {
               }
             });
           }
-        } catch {}
+        } catch (e) { console.error("Neon Fetch Error:", e); }
       })()
     ];
 
@@ -68,33 +76,60 @@ export const persistenceService = {
 
   login: async (id: string, password: string) => {
     try {
+      // Increased timeout to 15s to handle Render Free Tier cold starts
       const res = await fetch(`${BACKEND_URL}/api/login?key=${API_KEY}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, password }),
-        signal: AbortSignal.timeout(4000)
+        signal: AbortSignal.timeout(15000)
       });
+      
       if (res.ok) return await res.json();
-    } catch {}
+      
+      if (res.status === 401) {
+          throw new Error("Invalid Agent Credentials");
+      }
+    } catch (e: any) {
+        if (e.name === 'TimeoutError' || e.message?.includes('fetch')) {
+            console.warn("[Persistence] Server unreachable, attempting local bypass...");
+        } else {
+            throw e;
+        }
+    }
 
-    if ((id === 'admin' || id === 'ADM-ROOT') && (password === 'admin' || password === '123')) {
+    // Standardized Bypass for ADM-ROOT and n1
+    const isAdmin = (id === 'admin' || id === 'ADM-ROOT') && (password === 'admin' || password === '123');
+    const isBDO = (id === 'n1') && (password === '12345' || password === '123');
+
+    if (isAdmin) {
       return { token: 'dev-bypass-token', user: { id: 'ADM-ROOT', name: 'System Admin', role: 'Admin' } };
     }
-    throw new Error("Login Failed");
+    if (isBDO) {
+        return { token: 'dev-bypass-token', user: { id: 'n1', name: 'James Wilson', role: 'BDO' } };
+    }
+
+    throw new Error("Login Failed: Unrecognized ID or Password");
   },
 
   addOfficerAPI: async (officer: Partial<SalesOfficer>) => {
     const token = localStorage.getItem('bdo_auth_token') || 'dev-bypass-token';
-    const payload = { ...officer, role: officer.role || 'Senior BDO', status: 'Offline', password: officer.password || '123' };
+    const payload = { 
+        ...officer, 
+        role: officer.role || 'Senior BDO', 
+        status: 'Offline', 
+        password: officer.password || '123' 
+    };
 
-    console.log("[Sync] Deploying Node:", payload.id);
+    console.log("[Sync] Deploying Node to dual-storage:", payload.id);
 
+    // NEON WRITE
     const neonTask = fetch(`${BACKEND_URL}/api/officers?key=${API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify(payload)
     }).then(r => r.ok ? "Neon:OK" : `Neon:FAIL(${r.status})`);
 
+    // SUPABASE WRITE
     let supabaseTask = Promise.resolve("Supabase:Skipped");
     if (supabase) {
       supabaseTask = supabase.from('officers').upsert({
@@ -109,7 +144,7 @@ export const persistenceService = {
     }
 
     const results = await Promise.allSettled([neonTask, supabaseTask]);
-    console.log("[Sync] Final Status:", results.map(r => r.status === 'fulfilled' ? r.value : r.reason));
+    console.log("[Sync] Final Write Report:", results.map(r => r.status === 'fulfilled' ? r.value : r.reason));
   },
 
   deleteOfficerAPI: async (id: string) => {
@@ -121,16 +156,12 @@ export const persistenceService = {
     await Promise.allSettled(tasks);
   },
 
-  // FIX: Added missing updateOfficerAvatarAPI method for identity verification sync
   updateOfficerAvatarAPI: async (id: string, avatar: string) => {
     const token = localStorage.getItem('bdo_auth_token') || 'dev-bypass-token';
     const tasks = [
       fetch(`${BACKEND_URL}/api/officers/${id}?key=${API_KEY}`, {
         method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${token}` 
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ avatar })
       }),
       supabase?.from('officers').update({ avatar }).eq('id', id)
@@ -138,12 +169,9 @@ export const persistenceService = {
     await Promise.allSettled(tasks);
   },
 
-  // FIX: Added missing triggerCleanupAPI method to purge historical telemetry
   triggerCleanupAPI: async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/cleanup?key=${API_KEY}`, { 
-        method: 'POST' 
-      });
+      const res = await fetch(`${BACKEND_URL}/api/cleanup?key=${API_KEY}`, { method: 'POST' });
       return res.ok;
     } catch { return false; }
   }

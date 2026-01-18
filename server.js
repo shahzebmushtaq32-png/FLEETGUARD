@@ -69,6 +69,7 @@ const authenticateToken = (req, res, next) => {
 const initDB = async () => {
   const client = await pool.connect();
   try {
+    console.log("🛠 Initializing Database Schema...");
     await client.query(`
       CREATE TABLE IF NOT EXISTS officers (
         id TEXT PRIMARY KEY,
@@ -96,10 +97,13 @@ const initDB = async () => {
     `);
     const { rows } = await client.query('SELECT COUNT(*) FROM officers');
     if (parseInt(rows[0].count) === 0) {
+      console.log("🌱 Seeding initial nodes into Neon...");
       await client.query(
-        "INSERT INTO officers (id, name, password, role) VALUES ('ADM-ROOT', 'System Administrator', 'admin', 'Admin'), ('n1', 'James Wilson', '12345', 'Senior BDO')"
+        "INSERT INTO officers (id, name, password, role) VALUES ('ADM-ROOT', 'System Administrator', '123', 'Admin'), ('n1', 'James Wilson', '123', 'Senior BDO')"
       );
     }
+  } catch (err) {
+      console.error("❌ DB Init Failed:", err.message);
   } finally {
     client.release();
   }
@@ -130,15 +134,28 @@ app.get('/api/r2-health', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
   const { id, password } = req.body;
+  console.log(`[Auth] Login attempt for ID: ${id}`);
   try {
     const queryId = id === 'admin' ? 'ADM-ROOT' : id;
     const { rows } = await pool.query('SELECT * FROM officers WHERE id = $1', [queryId]);
     const user = rows[0];
-    if (!user || user.password !== password) return res.status(401).json({ error: 'Invalid Credentials' });
+    
+    if (!user) {
+        console.warn(`[Auth] User ${queryId} not found in database.`);
+        return res.status(401).json({ error: 'User Not Found' });
+    }
+
+    if (user.password !== password) {
+        console.warn(`[Auth] Incorrect password for ${queryId}.`);
+        return res.status(401).json({ error: 'Invalid Credentials' });
+    }
+
+    console.log(`[Auth] Success for ${queryId}`);
     const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '12h' });
     res.json({ token, user: { id: user.id, name: user.name, role: user.role, avatar: user.avatar } });
   } catch (err) {
-    res.status(500).json({ error: 'Login Error' });
+    console.error("[Auth] Login Error:", err.message);
+    res.status(500).json({ error: 'Server Internal Error' });
   }
 });
 
@@ -184,7 +201,6 @@ app.delete('/api/officers/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// FIX: Added /api/cleanup endpoint to purge historical telemetry rows older than 30 days
 app.post('/api/cleanup', async (req, res) => {
   const apiKey = req.headers['x-api-key'] || req.query.key;
   if (apiKey !== WS_API_KEY) return res.status(401).json({ error: 'Gateway Unauthorized' });
@@ -222,4 +238,4 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => console.log(`🚀 Node Active on ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 BDO Fleet Node Active on ${PORT}`));
