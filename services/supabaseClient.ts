@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 
 // Safe environment variable access
@@ -8,12 +9,9 @@ const getEnvVar = (key: string) => {
   return '';
 };
 
-/**
- * Supabase Configuration for BDO Fleet Guard
- * Updated with user-provided credentials for project 'aunwiryjnmogsnmstbko'
- */
-const SUPABASE_URL = getEnvVar('VITE_SUPABASE_URL') || 'https://aunwiryjnmogsnmstbko.supabase.co';
-const SUPABASE_ANON_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1bndpcnlqbm1vZ3NubXN0YmtvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1NDUxMTQsImV4cCI6MjA4NDEyMTExNH0.Cg6bhZqPYIjCKWURoK8F28PrwJ-zU-DkKxCXWMWT_ck';
+// Use provided keys as hard fallback for production stability
+const SUPABASE_URL = getEnvVar('VITE_SUPABASE_URL') || 'https://vpriyflmlhmfuvyurexp.supabase.co';
+const SUPABASE_ANON_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwcml5ZmxtbGhtZnV2eXVyZXhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1NjEyNzgsImV4cCI6MjA4NDEzNzI3OH0.F4MXNc4H2n4PZY4RWYlCTqTtem0ioZQKZwOohW7gUfI';
 
 let client = null;
 
