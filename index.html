@@ -32,47 +32,37 @@
         z-index: 1000;
         text-transform: uppercase;
     }
-    
-    @keyframes pulse-ring {
-      0% { transform: scale(0.33); opacity: 1; }
-      80%, 100% { opacity: 0; }
-    }
-    
-    .bdo-loader {
-      border: 3px solid #f3f3f3;
-      border-top: 3px solid #FFD100;
-      border-radius: 50%;
-      width: 24px;
-      height: 24px;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
   </style>
+  <script>
+    // Polyfill process.env for browser environment
+    window.process = {
+      env: {
+        API_KEY: "" // Will be handled by the environment or actual calls
+      }
+    };
+  </script>
 <script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@19.0.0",
     "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/": "https://esm.sh/react-dom@19.0.0/",
-    "react/": "https://esm.sh/react@19.0.0/",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
     "@google/genai": "https://esm.sh/@google/genai@0.2.1",
     "@aws-sdk/client-s3": "https://esm.sh/@aws-sdk/client-s3@3.600.0",
     "@aws-sdk/s3-request-presigner": "https://esm.sh/@aws-sdk/s3-request-presigner@3.600.0",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.0",
     "express": "https://esm.sh/express@^5.2.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "path": "https://esm.sh/path@^0.12.7",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "url": "https://esm.sh/url@^0.11.4",
+    "jsonwebtoken": "https://esm.sh/jsonwebtoken@^9.0.3",
     "http": "https://esm.sh/http@^0.0.1-security",
-    "ws": "https://esm.sh/ws@^8.19.0",
     "pg": "https://esm.sh/pg@^8.17.1",
     "cors": "https://esm.sh/cors@^2.8.5",
-    "jsonwebtoken": "https://esm.sh/jsonwebtoken@^9.0.3",
-    "path": "https://esm.sh/path@^0.12.7",
-    "url": "https://esm.sh/url@^0.11.4",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+    "ws": "https://esm.sh/ws@^8.19.0"
   }
 }
 </script>
@@ -80,6 +70,6 @@
 <body class="bg-[#0f172a] text-gray-100 overflow-hidden">
   <div class="prod-watermark">BDO_SECURE_GRID_V3_FINAL</div>
   <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+  <script type="module" src="index.tsx"></script>
 </body>
 </html>

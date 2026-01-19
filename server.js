@@ -1,4 +1,3 @@
-
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -26,7 +25,7 @@ const getDbUrl = () => {
 
 const pool = new Pool({
   connectionString: getDbUrl(),
-  ssl: { rejectUnauthorized: false }, // Necessary for Neon DB on free tiers
+  ssl: { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000
@@ -35,16 +34,8 @@ const pool = new Pool({
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(__dirname));
 
-app.get("/", (req, res) => {
-  if (req.headers.accept && req.headers.accept.includes('text/html')) {
-    res.sendFile(path.join(__dirname, 'index.html'));
-  } else {
-    res.status(200).send("BDO FleetGuard API is running 🚀");
-  }
-});
-
+// Health check endpoint
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -52,6 +43,9 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Serve static files from the current directory
+app.use(express.static(__dirname));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -95,7 +89,6 @@ const initDB = async () => {
       );
     `);
     
-    // Seed initial users if table is empty
     const { rows } = await client.query('SELECT COUNT(*) FROM officers');
     if (parseInt(rows[0].count) === 0) {
       console.log("🌱 Seeding default demo accounts...");
@@ -142,6 +135,11 @@ app.get('/api/officers', authenticateToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Fetch Error' });
   }
+});
+
+// Catch-all route to serve index.html for frontend routing
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 server.on('upgrade', (req, socket, head) => {

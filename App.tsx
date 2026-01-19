@@ -1,11 +1,10 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
-import { SalesOfficer, User, UserRole, SystemStats, Incident } from './types';
-import Login from './components/Login';
-import AdminDashboard from './components/AdminDashboard';
-import { BDOView } from './components/BDOView';
-import { persistenceService } from './services/persistenceService';
-import { socketService } from './services/socketService';
+import { SalesOfficer, User, UserRole, SystemStats, Incident } from './types.ts';
+import Login from './components/Login.tsx';
+import AdminDashboard from './components/AdminDashboard.tsx';
+import { BDOView } from './components/BDOView.tsx';
+import { persistenceService } from './services/persistenceService.ts';
+import { socketService } from './services/socketService.ts';
 
 const INITIAL_OFFICER_TEMPLATE: SalesOfficer = { 
     id: 'unknown', name: 'Syncing...', lat: 14.5547, lng: 121.0244, 
@@ -52,7 +51,6 @@ const App: React.FC = () => {
       });
 
       socketService.onIncident((inc) => {
-        // PROTECTIVE: Ensure incoming time is always a Date object
         const formattedInc = { 
           ...inc, 
           time: inc.time instanceof Date ? inc.time : new Date(inc.time) 

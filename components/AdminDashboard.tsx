@@ -1,15 +1,14 @@
-
 import React, { useState, useEffect } from 'react';
-import { User, SalesOfficer, Geofence, Message, SystemStats, DispatchRecommendation, Incident } from '../types';
-import Sidebar from './Sidebar';
-import MapComponent from './MapComponent';
-import DispatchHub from './DispatchHub';
-import AuditPanel from './AuditPanel';
-import GeminiAssistant from './GeminiAssistant';
-import ArchitectureGuide from './ArchitectureGuide';
-import IncidentFeed from './IncidentFeed';
-import { persistenceService } from '../services/persistenceService';
-import { getDispatchRecommendations } from '../services/geminiService';
+import { User, SalesOfficer, Geofence, Message, SystemStats, DispatchRecommendation, Incident } from '../types.ts';
+import Sidebar from './Sidebar.tsx';
+import MapComponent from './MapComponent.tsx';
+import DispatchHub from './DispatchHub.tsx';
+import AuditPanel from './AuditPanel.tsx';
+import GeminiAssistant from './GeminiAssistant.tsx';
+import ArchitectureGuide from './ArchitectureGuide.tsx';
+import IncidentFeed from './IncidentFeed.tsx';
+import { persistenceService } from '../services/persistenceService.ts';
+import { getDispatchRecommendations } from '../services/geminiService.ts';
 
 interface AdminDashboardProps {
   user: User;
