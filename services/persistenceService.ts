@@ -1,4 +1,3 @@
-
 import { SalesOfficer } from "../types";
 import { supabase } from "./supabaseClient";
 
