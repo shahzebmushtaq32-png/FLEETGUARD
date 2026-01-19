@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { User, SalesOfficer, Incident, Message } from '../types';
 import { socketService } from '../services/socketService';
@@ -36,13 +35,14 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const watchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
   const gpsRetryCount = useRef(0);
+  const useHighAccuracy = useRef(true);
 
   const [permStatus, setPermStatus] = useState({
     cam: 'pending',
-    geo: 'pending'
+    geo: 'pending',
+    geoMode: 'high'
   });
 
-  // Shift Enforcement Logic (11 AM - 6 PM)
   const [isOutOfShift, setIsOutOfShift] = useState(false);
   
   useEffect(() => {
@@ -62,146 +62,103 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
         wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
         setIsWakeLocked(true);
       } catch (err) {
-        // Silent fail for environment restrictions
         setIsWakeLocked(false);
       }
     }
   };
 
   const stopCamera = useCallback(() => {
-    console.log("[Optics] Releasing hardware resources...");
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop();
-        track.enabled = false;
-      });
+      streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
-      videoRef.current.load(); 
     }
     setPermStatus(p => ({ ...p, cam: 'pending' }));
   }, []);
-
-  const reportGpsBreach = useCallback((errorType: string) => {
-    if (!officer) return;
-    const breach: Incident = {
-      id: `GPS_${officer.id}_${Date.now()}`,
-      title: "GPS UPLINK BREACH",
-      desc: `Agent ${officer.name} (${officer.id}) location services are ${errorType}. Forced standby applied.`,
-      time: new Date(),
-      severity: 'critical'
-    };
-    socketService.sendIncident(breach);
-  }, [officer]);
 
   const broadcastTelemetry = useCallback((customPayload?: Partial<SalesOfficer>) => {
     if (!officer) return;
     const activeAvatar = customPayload?.avatar || capturedPhoto || officer.avatar;
     const telemetry: Partial<SalesOfficer> = {
       id: officer.id,
+      name: officer.name,
       lat: customPayload?.lat || officer.lat,
       lng: customPayload?.lng || officer.lng,
       battery: realBattery,
       status: currentStatus,
       avatar: activeAvatar,
       lastUpdate: new Date(),
-      telemetrySource: 'ANDROID_BG',
+      telemetrySource: 'ANDROID_FG',
       ...customPayload
     };
     socketService.sendTelemetry(telemetry);
   }, [officer, realBattery, currentStatus, capturedPhoto]);
 
-  // GPS Mandatory Check
-  useEffect(() => {
-    if (permStatus.geo === 'fail' && currentStatus !== 'Offline') {
-      setCurrentStatus('Offline');
-      broadcastTelemetry({ status: 'Offline' });
-    }
-  }, [permStatus.geo, currentStatus, broadcastTelemetry]);
-
-  // CAMERA LIFECYCLE - Strict Isolation
   const startCamera = async () => {
     try {
       if (streamRef.current) return;
-      console.log("[Optics] Starting Biometric Lens...");
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } 
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // Re-trigger play to handle browser pauses
         videoRef.current.play().catch(() => {});
       }
       setPermStatus(p => ({ ...p, cam: 'ok' }));
       setSecurityError(null);
     } catch (err) {
-      console.error("[Optics] Hardware Error:", err);
       setPermStatus(p => ({ ...p, cam: 'fail' }));
-      setSecurityError("Camera access failed. Check browser permissions.");
+      setSecurityError("Camera access failed.");
     }
   };
 
-  useEffect(() => {
-    if (activeTab === 'selfie') {
-      startCamera();
-    } else {
-      stopCamera();
-    }
-    // Cleanup on tab switch only
-  }, [activeTab, stopCamera]);
-
   const initGps = useCallback(() => {
-    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-    
-    console.log("[GPS] Handshaking... Attempt:", gpsRetryCount.current);
-    
-    if ("geolocation" in navigator) {
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (pos) => {
-          const { latitude, longitude, accuracy } = pos.coords;
-          gpsRetryCount.current = 0; 
-          setPermStatus(p => ({ ...p, geo: 'ok' }));
-          broadcastTelemetry({ lat: latitude, lng: longitude });
-        },
-        (err) => {
-          console.error("[GPS] Fail code:", err.code);
-          
-          // Silently retry twice for timeouts (Code 3)
-          if (err.code === 3 && gpsRetryCount.current < 2) {
-             gpsRetryCount.current++;
-             setTimeout(initGps, 3000);
-             return;
-          }
-
-          setPermStatus(p => ({ ...p, geo: 'fail' }));
-          if (err.code === 1) {
-            setSecurityError("Location access denied by browser.");
-          }
-        },
-        { 
-          enableHighAccuracy: true, 
-          timeout: 10000, 
-          maximumAge: 5000 
-        }
-      );
-    } else {
-      setPermStatus(p => ({ ...p, geo: 'fail' }));
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
+    
+    if (!("geolocation" in navigator)) {
+      setPermStatus(p => ({ ...p, geo: 'fail' }));
+      return;
+    }
+
+    setPermStatus(p => ({ ...p, geo: 'pending' }));
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        gpsRetryCount.current = 0; 
+        setPermStatus(p => ({ ...p, geo: 'ok', geoMode: useHighAccuracy.current ? 'high' : 'low' }));
+        broadcastTelemetry({ lat: latitude, lng: longitude });
+      },
+      (err) => {
+        console.warn(`[GPS] Signal Error: ${err.message}`);
+        
+        if (err.code === 3 && gpsRetryCount.current < 2) {
+          gpsRetryCount.current++;
+          if (gpsRetryCount.current === 2) {
+            useHighAccuracy.current = false; // Adaptive fallback to network
+          }
+          setTimeout(initGps, 2000);
+          return;
+        }
+        setPermStatus(p => ({ ...p, geo: 'fail' }));
+      },
+      { 
+        enableHighAccuracy: useHighAccuracy.current, 
+        timeout: 25000, 
+        maximumAge: 0 // Force fresh reading
+      }
+    );
   }, [broadcastTelemetry]);
 
-  // GLOBAL HARDWARE INIT
   useEffect(() => {
-    // Delay GPS to allow browser/frame stabilization
-    const timer = setTimeout(initGps, 1500);
+    const timer = setTimeout(initGps, 1000);
     requestWakeLock();
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') requestWakeLock();
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
 
     if ('getBattery' in navigator) {
       (navigator as any).getBattery().then((battery: any) => {
@@ -214,10 +171,14 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
     return () => {
         clearTimeout(timer);
         if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-        document.removeEventListener('visibilitychange', handleVisibility);
-        // Note: stopCamera() removed from global cleanup to fix the camera termination bug
+        stopCamera();
     };
-  }, [initGps]);
+  }, [initGps, stopCamera]);
+
+  useEffect(() => {
+    if (activeTab === 'selfie') startCamera();
+    else stopCamera();
+  }, [activeTab, stopCamera]);
 
   useEffect(() => {
     broadcastTelemetry();
@@ -226,35 +187,37 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
   const handleSelfieCapture = async () => {
     if (!videoRef.current || !canvasRef.current || !officer) return;
     setIsCapturing(true);
-    const video = videoRef.current;
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
     
-    if (context && video.videoWidth > 0) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      context.drawImage(video, 0, 0);
+    if (context && videoRef.current.videoWidth > 0) {
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      context.drawImage(videoRef.current, 0, 0);
       const imageData = canvas.toDataURL('image/jpeg', 0.8);
       
       try {
           const aiResult = await verifyBdoIdentity(imageData);
           if (aiResult.verified) {
-              const url = await r2Service.uploadEvidence(imageData, `audit_${officer.id}_${Date.now()}.jpg`);
+              const url = await r2Service.uploadEvidence(imageData, `avatar_${officer.id}.jpg`);
               setCapturedPhoto(url);
               await persistenceService.updateOfficerAvatarAPI(officer.id, url);
               broadcastTelemetry({ avatar: url });
-              
               stopCamera();
               setTimeout(() => setActiveTab('home'), 1000);
           } else {
               setSecurityError(aiResult.welcomeMessage || "Verification failed.");
           }
       } catch (e) {
-          setSecurityError("Verification Uplink Error.");
+          setSecurityError("Uplink Error.");
       } finally {
           setIsCapturing(false);
       }
     }
+  };
+
+  const handleImgError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+    e.currentTarget.src = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(officer.name) + '&background=003366&color=FFD100&bold=true&size=256';
   };
 
   return (
@@ -263,7 +226,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
        
        {isOutOfShift && (
          <div className="fixed inset-0 z-[200] bg-[#001D3D] flex flex-col items-center justify-center p-12 text-center">
-            <h2 className="text-xl font-black text-white uppercase tracking-widest mb-2 text-[#FFD100]">Shift Standby</h2>
+            <h2 className="text-xl font-black text-[#FFD100] uppercase tracking-widest mb-2">Shift Standby</h2>
             <p className="text-[9px] text-white/50 font-bold uppercase tracking-[0.2em] mb-10 leading-relaxed">Uplink Restricted (11:00 AM - 06:00 PM)</p>
             <button onClick={onLogout} className="text-[10px] font-black text-white/30 uppercase tracking-widest hover:text-white border-b border-white/10 pb-1">Terminate Session</button>
          </div>
@@ -271,12 +234,12 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
 
        <div className="bg-[#001D3D] px-6 py-2 flex items-center justify-between border-b border-white/5">
            <div className="flex items-center gap-3">
-               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
-               <span className="text-[7px] font-black text-white/40 uppercase tracking-[0.2em]">CORE_LINK_STABLE</span>
+               <div className={`w-1.5 h-1.5 rounded-full ${wsStatus?.includes('Live') ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></div>
+               <span className="text-[7px] font-black text-white/40 uppercase tracking-[0.2em]">CORE_LINK_{wsStatus?.toUpperCase() || 'OFFLINE'}</span>
            </div>
            <div className="flex items-center gap-3">
                <div className={`flex items-center gap-1 text-[7px] font-black uppercase px-2 py-0.5 rounded-full ${isWakeLocked ? 'bg-cyan-500/10 text-cyan-400' : 'bg-red-500/10 text-red-400'}`}>
-                   {isWakeLocked ? 'WAKELOCK:ON' : 'WAKELOCK:OFF'}
+                   WAKELOCK:{isWakeLocked ? 'ON' : 'OFF'}
                </div>
                <div className={`flex items-center gap-1 text-[7px] font-black px-2 py-0.5 rounded-full ${permStatus.cam === 'ok' ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 bg-white/5'}`}>
                    CAM:{permStatus.cam === 'ok' ? 'ACTIVE' : 'STANDBY'}
@@ -287,24 +250,32 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
        <div className="bg-[#001D3D] px-6 py-1.5 flex items-center justify-between">
            <div className="flex items-center gap-3">
                <span className="text-[8px] font-black text-white/50 uppercase tracking-[0.2em]">NODE: {officer.id}</span>
-               {permStatus.geo === 'fail' && (
-                   <button onClick={() => { gpsRetryCount.current = 0; initGps(); }} className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded animate-pulse group">
+               {permStatus.geo === 'fail' ? (
+                   <button onClick={() => { gpsRetryCount.current = 0; useHighAccuracy.current = true; initGps(); }} className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded animate-pulse group">
                         <svg className="w-3 h-3 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd"></path></svg>
                         <span className="text-[8px] font-black text-red-500 uppercase">GPS_FAIL (RETRY)</span>
                    </button>
-               )}
-               {permStatus.geo === 'pending' && (
-                   <span className="text-[8px] font-black text-cyan-500/50 uppercase animate-pulse">GPS_SYNC...</span>
+               ) : (
+                  <div className="flex items-center gap-2">
+                     <span className={`text-[8px] font-black uppercase tracking-widest ${permStatus.geo === 'ok' ? 'text-emerald-400' : 'text-blue-400 animate-pulse'}`}>
+                        {permStatus.geo === 'ok' ? (permStatus.geoMode === 'high' ? 'GPS_SAT_LINK' : 'GPS_NET_FALLBACK') : 'GPS_SYNCING...'}
+                     </span>
+                  </div>
                )}
            </div>
-           <span className="text-[8px] font-black text-white/50 uppercase tracking-widest">UPLINK: {wsStatus}</span>
+           <span className="text-[8px] font-black text-white/50 uppercase tracking-widest">UPLINK_STRENGTH: {officer.signalStrength}%</span>
        </div>
 
        <header className="bg-[#003366] text-white px-6 pt-10 pb-12 rounded-b-[4.5rem] shadow-2xl relative z-10">
           <div className="flex justify-between items-start mb-10">
              <div className="flex gap-5 items-center">
-                <div className="w-16 h-16 bg-white rounded-[1.75rem] overflow-hidden border-4 border-white/20">
-                    <img key={capturedPhoto} src={capturedPhoto || officer.avatar || 'https://via.placeholder.com/150'} className="w-full h-full object-cover" />
+                <div className="w-16 h-16 bg-white rounded-[1.75rem] overflow-hidden border-4 border-white/20 shadow-lg">
+                    <img 
+                      key={capturedPhoto || officer.avatar} 
+                      src={capturedPhoto || officer.avatar || ''} 
+                      onError={handleImgError}
+                      className="w-full h-full object-cover" 
+                    />
                 </div>
                 <div>
                     <h2 className="text-xl font-black uppercase tracking-tight mb-1.5">{officer.name}</h2>
@@ -320,9 +291,8 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                 {['Active', 'Break', 'Offline'].map(status => (
                     <button 
                         key={status} 
-                        disabled={permStatus.geo === 'fail' && status !== 'Offline'}
                         onClick={() => setCurrentStatus(status as any)} 
-                        className={`flex-1 py-4 rounded-[1.75rem] text-[10px] font-black uppercase transition-all ${currentStatus === status ? 'bg-[#FFD100] text-[#003366] shadow-lg scale-105' : 'text-slate-500'} disabled:opacity-20`}
+                        className={`flex-1 py-4 rounded-[1.75rem] text-[10px] font-black uppercase transition-all ${currentStatus === status ? 'bg-[#FFD100] text-[#003366] shadow-lg scale-105' : 'text-slate-500'}`}
                     >
                         {status}
                     </button>
@@ -334,31 +304,34 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
            {activeTab === 'home' && (
                <div className="grid grid-cols-2 gap-5 animate-in fade-in duration-500">
                    <div className="bg-white p-8 rounded-[3rem] shadow-sm flex flex-col items-center">
-                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Unit Load</p>
+                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3 tracking-widest">Unit Load</p>
                        <p className="text-5xl font-black text-[#003366]">{officer.visitCount || 0}</p>
                    </div>
                    <div className="bg-white p-8 rounded-[3rem] shadow-sm flex flex-col items-center">
-                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3">Power Status</p>
+                       <p className="text-[9px] text-slate-400 font-black uppercase mb-3 tracking-widest">Power Status</p>
                        <p className={`text-3xl font-black ${realBattery < 20 ? 'text-red-500 animate-pulse' : 'text-[#003366]'}`}>{realBattery}%</p>
                    </div>
                    
                    <div className="col-span-2 bg-white p-6 rounded-[3rem] shadow-sm flex items-center justify-between">
                        <div className="flex flex-col gap-1">
-                          <span className="text-[9px] font-black text-slate-400 uppercase">Hardware Health</span>
-                          <button onClick={() => initGps()} className="text-[10px] font-black text-[#003366] uppercase underline decoration-[#FFD100]">Re-Sync GPS Hardware</button>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Hardware Health</span>
+                          <button onClick={() => { gpsRetryCount.current = 0; useHighAccuracy.current = true; initGps(); }} className="text-[10px] font-black text-[#003366] uppercase underline decoration-[#FFD100]">Re-Sync Sensors</button>
                        </div>
                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${permStatus.geo === 'ok' ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-                          <span className="text-[9px] font-bold text-[#003366]">{permStatus.geo === 'ok' ? 'GPS_CONNECTED' : 'GPS_UNSTABLE'}</span>
+                          <div className={`w-2 h-2 rounded-full ${permStatus.geo === 'ok' ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></div>
+                          <span className="text-[9px] font-bold text-[#003366] uppercase">{permStatus.geo === 'ok' ? (permStatus.geoMode === 'high' ? 'SAT_ACTIVE' : 'NET_FALLBACK') : 'SYNC_FAIL'}</span>
                        </div>
                    </div>
 
-                   <div className="col-span-2 bg-white p-8 rounded-[3.5rem] shadow-xl flex items-center justify-between relative overflow-hidden">
+                   <div className="col-span-2 bg-[#003366] p-8 rounded-[3.5rem] shadow-xl flex items-center justify-between relative overflow-hidden">
+                       <div className="absolute inset-0 bg-gradient-to-br from-[#003366] to-[#001D3D]"></div>
                        <div className="relative z-10">
-                           <h4 className="text-[10px] font-black text-slate-400 uppercase mb-1">Pipeline Volume</h4>
-                           <p className="text-3xl font-black text-[#003366]">₱{((officer.pipelineValue || 0)/1000000).toFixed(1)}M</p>
+                           <h4 className="text-[10px] font-black text-white/50 uppercase mb-1 tracking-[0.2em]">Pipeline Volume</h4>
+                           <p className="text-3xl font-black text-white">₱{((officer.pipelineValue || 0)/1000000).toFixed(1)}M</p>
                        </div>
-                       <GeminiLiveVoice />
+                       <div className="relative z-10">
+                          <GeminiLiveVoice />
+                       </div>
                    </div>
                </div>
            )}
@@ -373,15 +346,15 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                             <div className="absolute inset-0 bg-[#001D3D]/60 backdrop-blur-sm flex items-center justify-center">
                                 <div className="flex flex-col items-center gap-4">
                                     <div className="w-10 h-10 border-4 border-[#FFD100] border-t-transparent rounded-full animate-spin"></div>
-                                    <span className="text-[9px] text-white font-black uppercase tracking-widest">Analyzing...</span>
+                                    <span className="text-[9px] text-white font-black uppercase tracking-widest">Analyzing Biometrics...</span>
                                 </div>
                             </div>
                         )}
                         {permStatus.cam === 'fail' && (
                              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 text-slate-400 p-8">
                                 <svg className="w-12 h-12 mb-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                <span className="text-[10px] uppercase font-black text-center">Optics Blocked.<br/>Check Browser Settings.</span>
-                                <button onClick={startCamera} className="mt-6 text-[10px] font-black text-[#FFD100] uppercase underline">Try Re-Initializing</button>
+                                <span className="text-[10px] uppercase font-black text-center">Optics Blocked.<br/>Check Browser Permissions.</span>
+                                <button onClick={startCamera} className="mt-6 text-[10px] font-black text-[#FFD100] uppercase underline">Re-Attempt Handshake</button>
                              </div>
                         )}
                     </div>
@@ -391,7 +364,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
                         disabled={isCapturing || permStatus.cam !== 'ok'} 
                         className="w-full bg-[#FFD100] text-[#003366] font-black py-5 rounded-[2rem] uppercase text-[11px] shadow-xl active:scale-95 transition-all disabled:opacity-50"
                     >
-                        {isCapturing ? 'Processing...' : 'Perform Audit'}
+                        {isCapturing ? 'Processing...' : 'Perform Biometric Audit'}
                     </button>
                </div>
            )}
