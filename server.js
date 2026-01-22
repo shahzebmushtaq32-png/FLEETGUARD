@@ -78,16 +78,20 @@ app.get('/api/officers', async (req, res) => {
 const distPath = path.join(__dirname, "dist");
 
 if (fs.existsSync(distPath)) {
-  console.log("📦 Serving production frontend from /dist");
+  console.log(`📦 Serving production frontend from: ${distPath}`);
   app.use(express.static(distPath));
-  // Serve index.html for any route to support SPA navigation
-  app.get("*", (req, res) => {
+  
+  // SPA Catch-all: Send index.html for any non-API route
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health')) {
+      return next();
+    }
     res.sendFile(path.join(distPath, "index.html"));
   });
 } else {
-  console.warn("⚠️ dist folder not found — API only mode");
+  console.warn("⚠️ Warning: /dist folder not found. API mode only.");
   app.get("/", (req, res) => {
-    res.send("🚀 BDO Fleet Guard API is running. Frontend build missing.");
+    res.send("🚀 BDO Fleet Guard Node Active. UI build (dist/) not detected.");
   });
 }
 
