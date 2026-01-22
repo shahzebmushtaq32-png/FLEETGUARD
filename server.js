@@ -80,13 +80,14 @@ const distPath = path.join(__dirname, "dist");
 if (fs.existsSync(distPath)) {
   console.log("📦 Serving production frontend from /dist");
   app.use(express.static(distPath));
+  // Serve index.html for any route to support SPA navigation
   app.get("*", (req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
   });
 } else {
-  console.warn("⚠️ dist folder not found — falling back to API only mode");
+  console.warn("⚠️ dist folder not found — API only mode");
   app.get("/", (req, res) => {
-    res.send("🚀 BDO Fleet Guard API is active. Frontend build missing from /dist.");
+    res.send("🚀 BDO Fleet Guard API is running. Frontend build missing.");
   });
 }
 
@@ -113,6 +114,4 @@ wss.on('connection', (ws) => {
 
 server.listen(PORT, () => {
   console.log(`🚀 BDO Fleet Node Active on Port ${PORT}`);
-  console.log(`📂 Current Path: ${__dirname}`);
-  console.log(`📂 Dist Path: ${distPath}`);
 });
