@@ -5,9 +5,11 @@ services:
     env: node
     plan: free
     region: oregon
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: npm install && npm run build
+    startCommand: npm start
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: NEON_DATABASE_URL
         sync: false
       - key: WS_API_KEY

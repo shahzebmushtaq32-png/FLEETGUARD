@@ -34,13 +34,14 @@
     }
   </style>
   <script>
-    // Essential browser polyfill for Node-style environment checks
+    // Essential browser polyfills to prevent crashes from Node-compatible libraries
     window.process = {
       env: {
         NODE_ENV: 'production',
         API_KEY: "" 
       },
-      cwd: () => '/'
+      cwd: () => '/',
+      browser: true
     };
     window.global = window;
   </script>
@@ -59,10 +60,11 @@
     "express": "https://esm.sh/express@^5.2.1",
     "http": "https://esm.sh/http@^0.0.1-security",
     "ws": "https://esm.sh/ws@^8.19.0",
-    "pg": "https://esm.sh/pg@^8.17.1",
+    "pg": "https://esm.sh/pg@^8.17.2",
     "cors": "https://esm.sh/cors@^2.8.5",
     "jsonwebtoken": "https://esm.sh/jsonwebtoken@^9.0.3",
     "path": "https://esm.sh/path@^0.12.7",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
     "url": "https://esm.sh/url@^0.11.4",
     "vite": "https://esm.sh/vite@^7.3.1",
     "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
@@ -71,7 +73,7 @@
 </script>
 </head>
 <body class="bg-[#0f172a] text-gray-100 overflow-hidden">
-  <div class="prod-watermark">BDO_SECURE_GRID_V3_FINAL</div>
+  <div class="prod-watermark">BDO_SECURE_GRID_PROD_STABLE</div>
   <div id="root"></div>
   <script type="module" src="index.tsx"></script>
 </body>

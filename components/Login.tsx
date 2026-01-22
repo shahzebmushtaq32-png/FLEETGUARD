@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { UserRole } from '../types';
-import { persistenceService } from '../services/persistenceService';
+import { UserRole } from '../types.ts';
+import { persistenceService } from '../services/persistenceService.ts';
 
 interface LoginProps {
   onLogin: (username: string, role: UserRole, officerId?: string) => void;
