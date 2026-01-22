@@ -1,41 +1,17 @@
 services:
-  # Backend: Realtime Geotracking Cluster (Node.js)
   - type: web
-    name: FLEETGUARD
+    name: FLEETGUARD-API
     env: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
-      - key: NEON_DATABASE_URL
-        sync: false
       - key: WS_API_KEY
         value: BDO_SECURE_NODE_99122
       - key: JWT_SECRET
         sync: false
-      - key: R2_ACCOUNT_ID
-        sync: false
-      - key: R2_BUCKET_NAME
-        value: bdo-fleet-assets
-      - key: R2_ACCESS_KEY_ID
-        sync: false
-      - key: R2_SECRET_ACCESS_KEY
-        sync: false
-      # Supabase Production Config
       - key: SUPABASE_URL
         value: https://vpriyflmlhmfuvyurexp.supabase.co
-      - key: SUPABASE_ANON_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwcml5ZmxtbGhtZnV2eXVyZXhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1NjEyNzgsImV4cCI6MjA4NDEzNzI3OH0.F4MXNc4H2n4PZY4RWYlCTqTtem0ioZQKZwOohW7gUfI
-      # Vite Frontend Build Variables
-      - key: VITE_SUPABASE_URL
-        value: https://vpriyflmlhmfuvyurexp.supabase.co
-      - key: VITE_SUPABASE_ANON_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwcml5ZmxtbGhtZnV2eXVyZXhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1NjEyNzgsImV4cCI6MjA4NDEzNzI3OH0.F4MXNc4H2n4PZY4RWYlCTqTtem0ioZQKZwOohW7gUfI
-      # Gemini AI API Key (Mandatory for AI features)
-      - key: API_KEY
-        sync: false
-      - key: VITE_API_KEY
-        sync: false

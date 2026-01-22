@@ -1,40 +1,85 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#003366">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="BDO Fleet">
-  <title>BDO Fleet Guard</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <style>
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; touch-action: manipulation; background: #001D3D; }
-    #map { height: 100%; width: 100%; }
-    .leaflet-container { font-family: inherit; background: #0f172a; }
-    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="theme-color" content="#003366" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BDO Fleet" />
 
-    /* Production Watermark */
+  <title>BDO Fleet Guard</title>
+
+  <!-- Tailwind Runtime -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    :root {
+      --bdo-blue: #003366;
+      --bdo-gold: #FFD100;
+      --bdo-dark: #001d3d;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      touch-action: manipulation;
+      background: var(--bdo-dark);
+      overscroll-behavior-y: contain;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+
     .prod-watermark {
-        position: fixed;
-        bottom: 120px;
-        right: -40px;
-        transform: rotate(-90deg);
-        font-size: 8px;
-        font-weight: 900;
-        color: rgba(255, 255, 255, 0.05);
-        letter-spacing: 0.5em;
-        pointer-events: none;
-        z-index: 1000;
-        text-transform: uppercase;
+      position: fixed;
+      bottom: 120px;
+      right: -40px;
+      transform: rotate(-90deg);
+      font-size: 8px;
+      font-weight: 900;
+      color: rgba(255, 255, 255, 0.05);
+      letter-spacing: 0.5em;
+      pointer-events: none;
+      z-index: 1000;
+      text-transform: uppercase;
+    }
+
+    /* Safe Area insets for modern mobile displays */
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom);
     }
   </style>
+
+  <!-- Essential Browser Polyfills -->
   <script>
-    // Essential browser polyfills to prevent crashes from Node-compatible libraries
     window.process = {
       env: {
         NODE_ENV: 'production',
@@ -45,15 +90,17 @@
     };
     window.global = window;
   </script>
-<script type="importmap">
+
+  <script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@18.3.1",
     "react-dom": "https://esm.sh/react-dom@18.3.1",
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-    "@google/genai": "https://esm.sh/@google/genai@0.2.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
     "@aws-sdk/client-s3": "https://esm.sh/@aws-sdk/client-s3@3.600.0",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.0",
+    "leaflet": "https://esm.sh/leaflet@1.9.4",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/",
     "express": "https://esm.sh/express@^5.2.1",
@@ -62,18 +109,20 @@
     "pg": "https://esm.sh/pg@^8.17.2",
     "cors": "https://esm.sh/cors@^2.8.5",
     "jsonwebtoken": "https://esm.sh/jsonwebtoken@^9.0.3",
-    "path": "https://esm.sh/path@^0.12.7",
-    "fs": "https://esm.sh/fs@^0.0.1-security",
     "url": "https://esm.sh/url@^0.11.4",
+    "path": "https://esm.sh/path@^0.12.7",
     "vite": "https://esm.sh/vite@^7.3.1",
     "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>
 </head>
+
 <body class="bg-[#0f172a] text-gray-100 overflow-hidden">
   <div class="prod-watermark">BDO_SECURE_GRID_PROD_STABLE</div>
   <div id="root"></div>
+
+  <!-- Entry Point -->
   <script type="module" src="index.tsx"></script>
 </body>
 </html>
