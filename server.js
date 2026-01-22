@@ -36,7 +36,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// --- API ENDPOINTS (MUST BE DEFINED BEFORE STATIC FALLBACK) ---
+// --- API ENDPOINTS ---
 
 app.get("/health", (req, res) => {
   res.json({ 
@@ -73,27 +73,24 @@ app.get('/api/officers', async (req, res) => {
   }
 });
 
-// --- STATIC FRONTEND SERVING (FINAL FIX IMPLEMENTATION) ---
+// --- STATIC FRONTEND SERVING ---
 
 const distPath = path.join(__dirname, "dist");
 
 if (fs.existsSync(distPath)) {
   console.log("📦 Serving production frontend from /dist");
-
   app.use(express.static(distPath));
-
   app.get("*", (req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
   });
 } else {
-  console.warn("⚠️ dist folder not found — frontend not built");
-
+  console.warn("⚠️ dist folder not found — falling back to API only mode");
   app.get("/", (req, res) => {
-    res.send("🚀 BDO Fleet Guard API is running (frontend missing)");
+    res.send("🚀 BDO Fleet Guard API is active. Frontend build missing from /dist.");
   });
 }
 
-// --- REALTIME SERVER (WEBSOCKETS) ---
+// --- REALTIME SERVER ---
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -116,4 +113,6 @@ wss.on('connection', (ws) => {
 
 server.listen(PORT, () => {
   console.log(`🚀 BDO Fleet Node Active on Port ${PORT}`);
+  console.log(`📂 Current Path: ${__dirname}`);
+  console.log(`📂 Dist Path: ${distPath}`);
 });
