@@ -42,6 +42,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 
+// Serve static files from the dist directory
+app.use(express.static(path.join(__dirname, 'dist')));
+
 // --- API ENDPOINTS ---
 
 app.get("/health", (req, res) => {
@@ -85,6 +88,11 @@ app.get("/api/neon-stats", async (req, res) => {
         const { rows } = await pool.query('SELECT count(*) as count FROM officers');
         res.json({ activeNodes: rows[0].count, telemetryPoints: 1240 });
     } catch (e) { res.status(500).send(e.message); }
+});
+
+// Catch-all route for frontend (SPA)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 // --- REALTIME SERVER ---
