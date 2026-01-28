@@ -1,4 +1,3 @@
-
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 /**
@@ -13,6 +12,7 @@ const SECRET_ACCESS_KEY = 'fd3e97181324351cec47f3fc27274aa3da02d320714a4745fbc60
 const ENDPOINT = `https://${ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 // Initialize the S3 Client with explicit browser-safe parameters.
+// Note: In a real production app, credentials should be proxied via backend or use presigned URLs.
 const s3Client = new S3Client({
   region: "auto",
   endpoint: ENDPOINT,
@@ -26,6 +26,9 @@ const s3Client = new S3Client({
 export const r2Service = {
   uploadEvidence: async (base64Data: string, fileName: string): Promise<string> => {
     try {
+      // Basic validation
+      if (!base64Data || base64Data.length < 100) return base64Data;
+
       // Clean base64 data
       const base64Parts = base64Data.split(',');
       const actualBase64 = base64Parts.length > 1 ? base64Parts[1] : base64Data;
@@ -49,13 +52,13 @@ export const r2Service = {
       await s3Client.send(command);
       console.log(`[R2 Storage] Direct Uplink Success: ${filePath}`);
 
-      // Return a predictable URL format or the base64 if public URL isn't configured
-      // Note: R2 public URLs usually require a custom domain or a specific format
-      // For this demo, we use a placeholder or return base64 if it fails to resolve
-      return base64Data;
+      // Since we don't have a public domain configured for R2 in this demo,
+      // we return the base64 as a fallback so the UI still updates instantly.
+      return base64Data; 
       
     } catch (error) {
-      console.error('[R2 Storage] Tactical Uplink Error:', error);
+      console.warn('[R2 Storage] Tactical Uplink Failed (Using Local Fallback):', error);
+      // Return local data so the UI flow doesn't break due to network/auth issues
       return base64Data; 
     }
   },

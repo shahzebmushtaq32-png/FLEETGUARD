@@ -1,11 +1,14 @@
-
 import { supabase } from './supabaseClient';
 import { SalesOfficer, Message, Incident } from "../types";
 
 export type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Broadcasting_Live' | 'Error' | 'Local_Mode';
 
+// Hardcoded production backend for stability in Native/Hybrid environments
+const BACKEND_WS_URL = 'wss://fleetguard-hrwf.onrender.com';
+
 class SocketService {
   private channel: any = null;
+  private nativeWs: WebSocket | null = null; // Direct connection to Backend Node
   private status: ConnectionStatus = 'Disconnected';
   private onMessageCallback: ((data: Partial<SalesOfficer>[]) => void) | null = null;
   private onChatCallback: ((msg: Message) => void) | null = null;
@@ -17,12 +20,53 @@ class SocketService {
     this.onStatusChangeCallback = onStatusChange;
     this.updateStatus('Connecting');
 
-    if (!supabase) {
-        console.warn("Supabase not configured. Realtime features disabled.");
+    // 1. Initialize Supabase Connection (Broadcast Layer)
+    if (supabase) {
+        this.connectSupabase(role);
+    } else {
+        console.warn("Supabase not configured. Running in Reduced Capability Mode.");
         this.updateStatus('Local_Mode');
-        return;
     }
 
+    // 2. Initialize Native WebSocket (Persistence Layer)
+    // Only IoT devices (Officers) need to write to the DB via WS
+    // We connect even if Supabase connects, to ensure DB persistence
+    if (role === 'iot') {
+        this.connectNativeWs();
+    }
+  }
+
+  private connectNativeWs() {
+      try {
+          // Use the explicit production backend URL.
+          // This fixes the "URL 'ws://' is invalid" error when running in file:// or native wrappers
+          // where window.location.host is empty or points to a frontend-only server (Vercel/Vite).
+          const wsUrl = BACKEND_WS_URL;
+          
+          console.log("[Socket] Connecting to Persistence Node:", wsUrl);
+          this.nativeWs = new WebSocket(wsUrl);
+
+          this.nativeWs.onopen = () => {
+              console.log("[Socket] Persistence Node Connected");
+              // If Supabase is down or connecting, this keeps us 'Live'
+              if (this.status !== 'Broadcasting_Live') this.updateStatus('Broadcasting_Live');
+          };
+
+          this.nativeWs.onerror = (e) => {
+              console.warn("[Socket] Persistence Node Error. Retrying...", e);
+          };
+          
+          this.nativeWs.onclose = () => {
+              console.log("[Socket] Persistence Node Closed. Reconnecting in 5s...");
+              setTimeout(() => this.connectNativeWs(), 5000);
+          };
+
+      } catch (e) {
+          console.error("[Socket] Native WS Setup Failed", e);
+      }
+  }
+
+  private connectSupabase(role: string) {
     try {
         if (this.channel) supabase.removeChannel(this.channel);
 
@@ -53,22 +97,27 @@ class SocketService {
                     this.updateStatus('Broadcasting_Live');
                     this.startHeartbeat();
                 } else if (status === 'CLOSED') {
-                    this.updateStatus('Disconnected');
+                    // Don't fully disconnect if Native WS is active
+                    if (!this.nativeWs || this.nativeWs.readyState !== WebSocket.OPEN) {
+                         this.updateStatus('Disconnected');
+                    }
                     this.stopHeartbeat();
                 } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
-                    this.updateStatus('Error');
+                    // Fallback: If Supabase fails, rely on Native WS if active
+                    if (!this.nativeWs || this.nativeWs.readyState !== WebSocket.OPEN) {
+                         this.updateStatus('Error');
+                    }
                     this.stopHeartbeat();
                 }
             });
     } catch (e) {
-        console.error("Socket Connect Error", e);
+        console.error("Supabase Connect Error", e);
         this.updateStatus('Error');
     }
   }
 
   private startHeartbeat() {
     this.stopHeartbeat();
-    // Heartbeat every 20 seconds to keep background channel open
     this.heartbeatInterval = setInterval(() => {
         if (this.channel) {
             this.channel.send({ type: 'broadcast', event: 'ping', payload: { time: Date.now() } });
@@ -88,8 +137,12 @@ class SocketService {
     if (this.channel && supabase) {
       supabase.removeChannel(this.channel);
       this.channel = null;
-      this.updateStatus('Disconnected');
     }
+    if (this.nativeWs) {
+        this.nativeWs.close();
+        this.nativeWs = null;
+    }
+    this.updateStatus('Disconnected');
   }
 
   private updateStatus(newStatus: ConnectionStatus) {
@@ -112,11 +165,16 @@ class SocketService {
   }
 
   async sendTelemetry(officer: Partial<SalesOfficer>) {
-    if (!this.channel) return;
-    try {
-        await this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer });
-    } catch (e) {
-        console.error("Telemetry Broadcast Failed", e);
+    // 1. Send to Supabase (Broadcast to Admin UI)
+    // This allows peers (Admins) to see updates instantly without DB polling
+    if (this.channel) {
+        this.channel.send({ type: 'broadcast', event: 'telemetry', payload: officer }).catch(console.warn);
+    }
+
+    // 2. Send to Native Backend (Persist to Database)
+    // This ensures data is saved to PostgreSQL for history and reporting
+    if (this.nativeWs && this.nativeWs.readyState === WebSocket.OPEN) {
+        this.nativeWs.send(JSON.stringify(officer));
     }
   }
 

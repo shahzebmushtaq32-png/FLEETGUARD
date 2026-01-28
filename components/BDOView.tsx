@@ -90,9 +90,10 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       status: currentStatus,
       avatar: activeAvatar,
       lastUpdate: new Date(),
-      telemetrySource: 'ANDROID_FG',
+      telemetrySource: 'ANDROID_FG', // Indicates high-frequency foreground data
       ...customPayload
     };
+    // Send to both Supabase (Live) and Backend (Persistence)
     socketService.sendTelemetry(telemetry);
   }, [officer, realBattery, currentStatus, capturedPhoto]);
 
@@ -111,7 +112,7 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       setSecurityError(null);
     } catch (err) {
       setPermStatus(p => ({ ...p, cam: 'fail' }));
-      setSecurityError("Camera access failed.");
+      setSecurityError("Camera access failed. Check Permissions.");
     }
   };
 
@@ -198,18 +199,28 @@ export const BDOView: React.FC<BDOViewProps> = ({ officer, onLogout, wsStatus, i
       
       try {
           const aiResult = await verifyBdoIdentity(imageData);
+          
           if (aiResult.verified) {
+              // Try upload, but fallback to local data if R2 fails (Network or Auth error)
               const url = await r2Service.uploadEvidence(imageData, `avatar_${officer.id}.jpg`);
+              
               setCapturedPhoto(url);
-              await persistenceService.updateOfficerAvatarAPI(officer.id, url);
+              
+              // Persist locally/remotely
+              // We don't await this to keep UI snappy
+              persistenceService.updateOfficerAvatarAPI(officer.id, url);
+              
+              // Broadcast update immediately
               broadcastTelemetry({ avatar: url });
+              
               stopCamera();
               setTimeout(() => setActiveTab('home'), 1000);
           } else {
               setSecurityError(aiResult.welcomeMessage || "Verification failed.");
           }
       } catch (e) {
-          setSecurityError("Uplink Error.");
+          console.error("Capture workflow failed", e);
+          setSecurityError("System Error. Try again.");
       } finally {
           setIsCapturing(false);
       }
